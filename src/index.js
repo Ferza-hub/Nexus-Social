@@ -16,7 +16,7 @@ function main() {
   log.info('Database ready.');
 
   startMonitor();
-  log.info('All systems up.');
+  log.info('All systems up. Phase 1 (Account Manager) + Phase 2 (Playwright Engine) ready.');
 }
 
 process.on('SIGINT',  () => { log.info('Shutting down (SIGINT)');  closeDb(); process.exit(0); });
