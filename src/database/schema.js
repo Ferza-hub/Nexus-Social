@@ -102,12 +102,84 @@ CREATE TABLE IF NOT EXISTS warmup_schedules (
 );
 
 -- ---------------------------------------------------------------
+-- oauth_tokens: platform API tokens per akun
+-- ---------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS oauth_tokens (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  account_id    INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  platform      TEXT    NOT NULL,
+  access_token  TEXT    NOT NULL,
+  refresh_token TEXT,
+  expires_at    DATETIME,
+  scope         TEXT,
+  meta_json     TEXT,
+  created_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(account_id, platform)
+);
+
+-- ---------------------------------------------------------------
+-- campaigns: growth / content / hybrid campaigns
+-- ---------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS campaigns (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  name            TEXT    NOT NULL,
+  account_id      INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  platform        TEXT    NOT NULL,
+  type            TEXT    NOT NULL CHECK(type IN ('growth','content','hybrid')),
+  status          TEXT    NOT NULL DEFAULT 'draft'
+                          CHECK(status IN ('draft','running','paused','completed','failed')),
+  config_json     TEXT    NOT NULL DEFAULT '{}',
+  target_count    INTEGER,
+  completed_count INTEGER NOT NULL DEFAULT 0,
+  created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+  started_at      DATETIME,
+  completed_at    DATETIME
+);
+
+-- ---------------------------------------------------------------
+-- campaign_logs: action-level results per campaign run
+-- ---------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS campaign_logs (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+  account_id  INTEGER NOT NULL,
+  action      TEXT    NOT NULL,
+  status      TEXT    NOT NULL CHECK(status IN ('success','failed','skipped','blocked')),
+  message     TEXT,
+  created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ---------------------------------------------------------------
+-- post_queue: scheduled content posts (CONTENT / HYBRID)
+-- ---------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS post_queue (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  account_id   INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  platform     TEXT    NOT NULL,
+  campaign_id  INTEGER REFERENCES campaigns(id) ON DELETE SET NULL,
+  content_json TEXT    NOT NULL,
+  scheduled_at DATETIME NOT NULL,
+  status       TEXT    NOT NULL DEFAULT 'pending'
+                       CHECK(status IN ('pending','running','done','failed','cancelled')),
+  retry_count  INTEGER NOT NULL DEFAULT 0,
+  max_retries  INTEGER NOT NULL DEFAULT 3,
+  result_json  TEXT,
+  created_at   DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at   DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ---------------------------------------------------------------
 -- Indexes
 -- ---------------------------------------------------------------
 CREATE INDEX IF NOT EXISTS idx_accounts_platform_status ON accounts(platform, status);
 CREATE INDEX IF NOT EXISTS idx_rate_limits_account      ON rate_limits(account_id, platform);
 CREATE INDEX IF NOT EXISTS idx_health_logs_account      ON health_logs(account_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_sessions_account         ON sessions(account_id, is_valid);
+CREATE INDEX IF NOT EXISTS idx_campaigns_status         ON campaigns(status, platform);
+CREATE INDEX IF NOT EXISTS idx_post_queue_scheduled     ON post_queue(scheduled_at, status);
+CREATE INDEX IF NOT EXISTS idx_campaign_logs_campaign   ON campaign_logs(campaign_id, created_at);
 `;
 
 function runMigrations(db) {

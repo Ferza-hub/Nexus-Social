@@ -1,7 +1,7 @@
 {
   "name": "nexus-social",
   "version": "1.0.0",
-  "description": "Social media automation engine — Account Manager, Playwright Engine, API Engine",
+  "description": "Social media automation engine — Account Manager, Playwright Engine, API Engine, Web Panel",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
@@ -11,8 +11,11 @@
   },
   "dependencies": {
     "better-sqlite3": "^9.4.3",
+    "cors": "^2.8.5",
     "dotenv": "^16.4.5",
+    "express": "^4.19.2",
     "https-proxy-agent": "^7.0.4",
+    "morgan": "^1.10.0",
     "node-cron": "^3.0.3",
     "playwright": "^1.44.0"
   },

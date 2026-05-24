@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Nexus Social</title>
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+  <div id="login-screen" class="login-screen hidden">
+    <div class="login-box">
+      <div class="login-logo">⬡ Nexus Social</div>
+      <input type="password" id="login-password" placeholder="Panel password" autocomplete="current-password">
+      <button id="login-btn" class="btn btn-primary w-full">Sign in</button>
+      <p id="login-error" class="error-text hidden">Invalid password</p>
+    </div>
+  </div>
+
+  <div id="app" class="app hidden">
+    <aside class="sidebar">
+      <div class="sidebar-logo">⬡ Nexus</div>
+      <nav class="sidebar-nav">
+        <a href="#accounts"  class="nav-item" data-page="accounts">
+          <span class="nav-icon">👤</span><span>Accounts</span>
+        </a>
+        <a href="#campaigns" class="nav-item" data-page="campaigns">
+          <span class="nav-icon">🚀</span><span>Campaigns</span>
+        </a>
+        <a href="#scheduler" class="nav-item" data-page="scheduler">
+          <span class="nav-icon">📅</span><span>Scheduler</span>
+        </a>
+        <a href="#proxies"   class="nav-item" data-page="proxies">
+          <span class="nav-icon">🔗</span><span>Proxies</span>
+        </a>
+        <a href="#analytics" class="nav-item" data-page="analytics">
+          <span class="nav-icon">📊</span><span>Analytics</span>
+        </a>
+        <a href="#logs"      class="nav-item" data-page="logs">
+          <span class="nav-icon">📋</span><span>Logs</span>
+        </a>
+      </nav>
+      <div class="sidebar-footer">
+        <button id="logout-btn" class="btn btn-ghost btn-sm">Sign out</button>
+      </div>
+    </aside>
+
+    <main class="main-content">
+      <div id="page-container"></div>
+    </main>
+  </div>
+
+  <!-- Modal -->
+  <div id="modal-overlay" class="modal-overlay hidden">
+    <div id="modal-box" class="modal-box">
+      <div class="modal-header">
+        <h3 id="modal-title"></h3>
+        <button id="modal-close" class="btn btn-ghost btn-sm">✕</button>
+      </div>
+      <div id="modal-body"></div>
+    </div>
+  </div>
+
+  <!-- Toast container -->
+  <div id="toast-container"></div>
+
+  <script src="/js/api.js"></script>
+  <script src="/js/components/modal.js"></script>
+  <script src="/js/components/toast.js"></script>
+  <script src="/js/pages/accounts.js"></script>
+  <script src="/js/pages/campaigns.js"></script>
+  <script src="/js/pages/scheduler.js"></script>
+  <script src="/js/pages/proxies.js"></script>
+  <script src="/js/pages/analytics.js"></script>
+  <script src="/js/pages/logs.js"></script>
+  <script src="/js/app.js"></script>
+</body>
+</html>
