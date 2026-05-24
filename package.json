@@ -1,0 +1,22 @@
+{
+  "name": "nexus-social",
+  "version": "1.0.0",
+  "description": "Social media automation engine — Account Manager, Playwright Engine, API Engine",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "setup-db": "node src/database/setup.js",
+    "health-check": "node src/account-manager/health-monitor.js --once"
+  },
+  "dependencies": {
+    "better-sqlite3": "^9.4.3",
+    "dotenv": "^16.4.5",
+    "https-proxy-agent": "^7.0.4",
+    "node-cron": "^3.0.3",
+    "playwright": "^1.44.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
