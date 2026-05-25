@@ -12,9 +12,14 @@ const log = makeLogger('Browser');
 // ----------------------------------------------------------------
 
 const _activeBrowsers = new Set();
+const MAX_CONCURRENT  = parseInt(process.env.MAX_CONCURRENT_BROWSERS ?? '4', 10);
 
 function isAccountBusy(accountId) {
   return _activeBrowsers.has(accountId);
+}
+
+function isConcurrencyFull() {
+  return _activeBrowsers.size >= MAX_CONCURRENT;
 }
 
 function markBusy(accountId) {
@@ -250,6 +255,9 @@ async function launchForAccount(accountId, platform) {
   if (isAccountBusy(accountId)) {
     throw new Error(`Account ${accountId} already has a running browser instance`);
   }
+  if (isConcurrencyFull()) {
+    throw new Error(`Concurrent browser limit reached (${MAX_CONCURRENT}). Try again later.`);
+  }
 
   const proxy = getProxyForAccount(accountId);
   const viewport = pick(DESKTOP_VIEWPORTS);
@@ -334,4 +342,4 @@ async function launchForAccount(accountId, platform) {
   };
 }
 
-module.exports = { launchForAccount, isAccountBusy };
+module.exports = { launchForAccount, isAccountBusy, isConcurrencyFull };

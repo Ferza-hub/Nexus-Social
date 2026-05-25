@@ -1,7 +1,7 @@
 'use strict';
 
 const { makeLogger } = require('../utils/logger');
-const { launchForAccount, isAccountBusy } = require('./browser');
+const { launchForAccount, isAccountBusy, isConcurrencyFull } = require('./browser');
 const { saveSession } = require('../account-manager/session-manager');
 const am = require('../account-manager/index');
 
@@ -120,10 +120,14 @@ async function executeAction(accountId, platform, action, params = {}) {
     if (account.status === 'disabled') return { success: false, reason: 'account_disabled' };
   }
 
-  // ---- 2. Prevent concurrent browser instances ----
+  // ---- 2. Prevent concurrent browser instances + global cap ----
   if (isAccountBusy(accountId)) {
     log.warn('Account busy — skipping', { accountId, platform, action });
     return { success: false, reason: 'account_busy' };
+  }
+  if (isConcurrencyFull()) {
+    log.warn('Concurrency limit reached — skipping', { accountId, platform, action });
+    return { success: false, reason: 'concurrency_limit' };
   }
 
   const account = am.getAccount(accountId);
