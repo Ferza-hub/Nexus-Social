@@ -26,6 +26,16 @@ const SEL = {
   article:            'article[role="presentation"]',
   like_button:        'svg[aria-label="Like"], [aria-label="Like"][role="button"]',
   unlike_button:      'svg[aria-label="Unlike"], [aria-label="Unlike"][role="button"]',
+
+  // Create post / Reel / Story
+  create_btn:         'svg[aria-label="New post"], a[href="/create/style/"]',
+  post_file_input:    'input[type="file"][accept*="video"], input[type="file"]',
+  // Upload wizard steps
+  next_button:        'div[role="button"]:has-text("Next"), button:has-text("Next")',
+  share_button:       'div[role="button"]:has-text("Share"), button:has-text("Share")',
+  caption_input:      'div[aria-label="Write a caption…"], div[role="textbox"][aria-label*="caption"]',
+  // Reel-specific: "Remix off", crop controls shown — skip with Next
+  reel_next:          'div[role="button"]:has-text("Next")',
   comment_button:     'svg[aria-label="Comment"], [aria-label="Comment"][role="button"]',
   comment_textarea:   'textarea[aria-label="Add a comment…"], textarea[placeholder*="Add a comment"], div[aria-label*="Add a comment"][role="textbox"]',
   comment_submit:     'div[role="button"]:has-text("Post"), button:has-text("Post")',
@@ -515,6 +525,115 @@ async function sendDM(page, username, message) {
   return { success: true };
 }
 
+// ----------------------------------------------------------------
+// 10. postReel — upload a Reel via browser (videoPath = local file)
+// ----------------------------------------------------------------
+
+async function postReel(page, { videoPath, caption = '', hashtags = [] } = {}) {
+  if (!videoPath) return { success: false, error: 'videoPath required' };
+  log.debug('Posting reel', { videoPath });
+
+  await page.goto(`${BASE_URL}/reels/create/`, { waitUntil: 'domcontentloaded', timeout: 20000 });
+  await h.waitForLoad(page);
+  await h.preAction();
+
+  const detection = await checkForDetection(page);
+  if (detection) return { success: false, event: detection };
+
+  // Trigger file chooser and upload video
+  const [fileChooser] = await Promise.all([
+    page.waitForFileChooser({ timeout: 10000 }),
+    page.locator(SEL.post_file_input).first().click().catch(async () => {
+      // Fallback: click the create (+) button to open upload dialog
+      await h.humanClick(page, SEL.create_btn);
+    }),
+  ]);
+  await fileChooser.setFiles(videoPath);
+  await h.waitForLoad(page, 15000);
+  await h.delay(h.randInt(2000, 4000)); // wait for video to process
+
+  // Click through the upload wizard (crop → trim → cover → caption)
+  for (let step = 0; step < 3; step++) {
+    const nextBtn = page.locator(SEL.next_button).first();
+    if (await nextBtn.count() > 0) {
+      await nextBtn.click();
+      await h.delay(h.randInt(1200, 2500));
+    }
+  }
+
+  // Write caption + hashtags
+  const fullCaption = [caption, hashtags.map(t => `#${t}`).join(' ')].filter(Boolean).join('\n\n');
+  if (fullCaption) {
+    const captionBox = page.locator(SEL.caption_input).first();
+    if (await captionBox.count() > 0) {
+      await captionBox.click();
+      await h.shortPause();
+      for (const char of fullCaption) {
+        await page.keyboard.type(char);
+        await h.typingPause();
+      }
+      await h.delay(h.randInt(500, 1000));
+    }
+  }
+
+  // Share
+  const shareBtn = page.locator(SEL.share_button).first();
+  if (await shareBtn.count() === 0) {
+    return { success: false, event: 'warning', message: 'Share button not found' };
+  }
+  await shareBtn.click();
+  await h.waitForLoad(page, 30000); // upload can take time
+
+  const d2 = await checkForDetection(page);
+  if (d2) return { success: false, event: d2 };
+
+  log.debug('Reel posted', { videoPath });
+  await h.postAction();
+  return { success: true };
+}
+
+// ----------------------------------------------------------------
+// 11. postStory — upload a Story via browser (mediaPath = local file)
+// ----------------------------------------------------------------
+
+async function postStory(page, { mediaPath } = {}) {
+  if (!mediaPath) return { success: false, error: 'mediaPath required' };
+  log.debug('Posting story', { mediaPath });
+
+  await page.goto(`${BASE_URL}/stories/create/`, { waitUntil: 'domcontentloaded', timeout: 20000 });
+  await h.waitForLoad(page);
+  await h.preAction();
+
+  const detection = await checkForDetection(page);
+  if (detection) return { success: false, event: detection };
+
+  // Upload file via file input or drag-and-drop zone
+  const [fileChooser] = await Promise.all([
+    page.waitForFileChooser({ timeout: 10000 }),
+    page.locator(SEL.post_file_input).first().click().catch(async () => {
+      await h.humanClick(page, SEL.create_btn);
+    }),
+  ]);
+  await fileChooser.setFiles(mediaPath);
+  await h.waitForLoad(page, 10000);
+  await h.delay(h.randInt(1500, 3000));
+
+  // Share to story
+  const shareBtn = page.locator(SEL.share_button).first();
+  if (await shareBtn.count() === 0) {
+    return { success: false, event: 'warning', message: 'Share button not found' };
+  }
+  await shareBtn.click();
+  await h.waitForLoad(page, 20000);
+
+  const d2 = await checkForDetection(page);
+  if (d2) return { success: false, event: d2 };
+
+  log.debug('Story posted', { mediaPath });
+  await h.postAction();
+  return { success: true };
+}
+
 module.exports = {
   login,
   scrollFeed,
@@ -525,6 +644,8 @@ module.exports = {
   commentPost,
   watchReel,
   sendDM,
+  postReel,
+  postStory,
   checkForDetection,
   generateTOTP,
 };

@@ -98,10 +98,11 @@ function canAct(accountId, platform, actionType) {
   if (account.status === 'flagged')  return { allowed: false, reason: 'account_flagged' };
 
   // 2-hour cooldown after action_block — no actions until window passes
+  // datetime() wrapper normalises both 'YYYY-MM-DD HH:MM:SS' and ISO 'T' formats
   const recentBlock = getDb().prepare(`
     SELECT id FROM health_logs
     WHERE account_id = ? AND platform = ? AND event_type = 'action_block'
-    AND created_at >= datetime('now', '-2 hours')
+    AND datetime(created_at) >= datetime('now', '-2 hours')
     LIMIT 1
   `).get(accountId, platform);
   if (recentBlock) return { allowed: false, reason: 'action_block_cooldown' };

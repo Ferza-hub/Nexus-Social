@@ -8,6 +8,9 @@ const am = require('../account-manager/index');
 const instagram = require('./platforms/instagram');
 const tiktok    = require('./platforms/tiktok');
 const twitter   = require('./platforms/twitter');
+const youtube   = require('./platforms/youtube');
+const threads   = require('./platforms/threads');
+const facebook  = require('./platforms/facebook');
 
 const log = makeLogger('PlaywrightEngine');
 
@@ -19,6 +22,9 @@ const PLATFORMS = {
   instagram,
   tiktok,
   twitter,
+  youtube,
+  threads,
+  facebook,
 };
 
 // ----------------------------------------------------------------
@@ -37,6 +43,8 @@ const ACTION_MAP = {
     comment:       { fn: 'commentPost',  rateType: 'comment' },
     watch_reel:    { fn: 'watchReel',    rateType: 'watch_reel' },
     dm:            { fn: 'sendDM',       rateType: 'dm' },
+    post_reel:     { fn: 'postReel',     rateType: null },
+    post_story:    { fn: 'postStory',    rateType: null },
   },
   tiktok: {
     login:         { fn: 'login',        rateType: null },
@@ -54,6 +62,30 @@ const ACTION_MAP = {
     unfollow:      { fn: 'unfollowUser', rateType: 'unfollow' },
     reply_tweet:   { fn: 'replyTweet',   rateType: 'comment' },
   },
+  youtube: {
+    login:         { fn: 'login',             rateType: null },
+    scroll_feed:   { fn: 'scrollFeed',        rateType: null },
+    watch_video:   { fn: 'watchVideo',        rateType: 'watch_reel' },
+    like_video:    { fn: 'likeVideo',         rateType: 'like' },
+    subscribe:     { fn: 'subscribeChannel',  rateType: 'follow' },
+    comment:       { fn: 'commentVideo',      rateType: 'comment' },
+  },
+  threads: {
+    login:         { fn: 'login',        rateType: null },
+    scroll_feed:   { fn: 'scrollFeed',   rateType: null },
+    like_post:     { fn: 'likePost',     rateType: 'like' },
+    follow:        { fn: 'followUser',   rateType: 'follow' },
+    unfollow:      { fn: 'unfollowUser', rateType: 'unfollow' },
+    comment:       { fn: 'comment',      rateType: 'comment' },
+  },
+  facebook: {
+    login:         { fn: 'login',        rateType: null },
+    scroll_feed:   { fn: 'scrollFeed',   rateType: null },
+    like_post:     { fn: 'likePost',     rateType: 'like' },
+    follow:        { fn: 'followUser',   rateType: 'follow' },
+    comment:       { fn: 'comment',      rateType: 'comment' },
+  },
+  // instagram additions (already has entries above — merge here)
 };
 
 // ----------------------------------------------------------------
@@ -168,6 +200,23 @@ async function _checkLoggedIn(page, platform) {
       const loginBtn = await page.$('a[href*="/login"]');
       return !loginBtn;
     }
+    if (platform === 'twitter') {
+      await page.goto('https://x.com/home', { waitUntil: 'domcontentloaded', timeout: 15000 });
+      return !page.url().includes('/i/flow/login') && !page.url().includes('/login');
+    }
+    if (platform === 'youtube') {
+      await page.goto('https://www.youtube.com/', { waitUntil: 'domcontentloaded', timeout: 15000 });
+      const avatar = await page.$('button#avatar-btn, #avatar-container');
+      return !!avatar;
+    }
+    if (platform === 'threads') {
+      await page.goto('https://www.threads.net/', { waitUntil: 'domcontentloaded', timeout: 15000 });
+      return !page.url().includes('/login');
+    }
+    if (platform === 'facebook') {
+      await page.goto('https://www.facebook.com/', { waitUntil: 'domcontentloaded', timeout: 15000 });
+      return !page.url().includes('/login') && !page.url().includes('login.php');
+    }
     return true;
   } catch (_) {
     return false;
@@ -211,6 +260,42 @@ function _buildArgs(action, platform, account, params) {
       case 'follow':       return [params.username];
       case 'unfollow':     return [params.username];
       case 'reply_tweet':  return [params.tweetUrl, params.text];
+    }
+  }
+  if (platform === 'youtube') {
+    switch (action) {
+      case 'login':        return [account];
+      case 'scroll_feed':  return [params];
+      case 'watch_video':  return [params.videoUrl];
+      case 'like_video':   return [params.videoUrl];
+      case 'subscribe':    return [params.channelUrl];
+      case 'comment':      return [params.videoUrl, params.text];
+    }
+  }
+  if (platform === 'threads') {
+    switch (action) {
+      case 'login':        return [account];
+      case 'scroll_feed':  return [params];
+      case 'like_post':    return [params.postUrl];
+      case 'follow':       return [params.username];
+      case 'unfollow':     return [params.username];
+      case 'comment':      return [params.postUrl, params.text];
+    }
+  }
+  if (platform === 'facebook') {
+    switch (action) {
+      case 'login':        return [account];
+      case 'scroll_feed':  return [params];
+      case 'like_post':    return [params.postUrl];
+      case 'follow':       return [params.profileUrl];
+      case 'comment':      return [params.postUrl, params.text];
+    }
+  }
+  // instagram post_reel / post_story additions
+  if (platform === 'instagram') {
+    switch (action) {
+      case 'post_reel':    return [params];  // { videoPath, caption, hashtags }
+      case 'post_story':   return [params];  // { mediaPath }
     }
   }
   return [];
