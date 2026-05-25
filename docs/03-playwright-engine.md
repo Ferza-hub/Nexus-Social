@@ -523,3 +523,243 @@ Navigate ke video. Click comment icon. Click input. `humanType()` teks. Submit v
 #### `scrollFYP(page, { seconds? })` → `{ success: true }`
 
 Scroll For You Page selama `seconds` detik (default `rand(30, 120)`). Tekan `ArrowDown` per video dengan watch time `rand(5000, 20000)` ms.
+
+---
+
+## Platform: Twitter/X (`platforms/twitter.js`)
+
+### Selector Registry
+
+| Key | Selector |
+|---|---|
+| `username_input` | `input[autocomplete="username"]` |
+| `password_input` | `input[type="password"][name="password"]` |
+| `login_button` | `[data-testid="LoginForm_Login_Button"]` |
+| `tweet_article` | `article[data-testid="tweet"]` |
+| `like_button` | `[data-testid="like"]` |
+| `liked_button` | `[data-testid="unlike"]` |
+| `follow_button` | `[data-testid*="follow"]:not([data-testid*="unfollow"])` |
+| `following_badge` | `[data-testid*="unfollow"]` |
+| `reply_button` | `[data-testid="reply"]` |
+| `reply_input` | `[data-testid="tweetTextarea_0"]` |
+| `tweet_submit` | `[data-testid="tweetButton"]` |
+
+### `checkForDetection(page)` → `string | null`
+
+| Return | Trigger |
+|---|---|
+| `'challenge'` | URL `/i/flow/` atau text `suspended` / `unusual activity` |
+| `'action_block'` | Text `rate limit`, `too many requests` |
+| `'login_required'` | URL `/login` |
+| `null` | Tidak ada deteksi |
+
+### Actions
+
+#### `login(page, account)` → `{ success, event? }`
+
+Multi-step flow: navigate `x.com/login` → type username → click Next → optional identity challenge (phone/email) → type password → click Log in. Detects suspension/challenge.
+
+#### `scrollFeed(page, { seconds? })` → `{ success: true }`
+
+Scroll Twitter home feed selama `seconds` detik dengan humanScroll + hover over tweets.
+
+#### `likePost(page, tweetUrl)` → `{ success, event?, alreadyLiked? }`
+
+Navigate ke tweet URL. Cek `liked_button`. Click `like_button`. Post-action detection check.
+
+#### `followUser(page, username)` → `{ success, event?, alreadyFollowing? }`
+
+Navigate ke `x.com/{username}`. Cek `following_badge`. Click `follow_button`. Verifikasi.
+
+#### `unfollowUser(page, username)` → `{ success, event?, notFollowing? }`
+
+Navigate ke profil. Click `following_badge` → konfirmasi dialog unfollow.
+
+#### `replyTweet(page, tweetUrl, text)` → `{ success, event? }`
+
+Navigate ke tweet. Click `reply_button`. Type teks ke `reply_input`. Click `tweet_submit`.
+
+---
+
+## Platform: YouTube (`platforms/youtube.js`)
+
+### Selector Registry
+
+| Key | Selector |
+|---|---|
+| `email_input` | `input[type="email"]` |
+| `password_input` | `input[type="password"]` |
+| `next_button` | `#identifierNext, #passwordNext` |
+| `totp_input` | `input[aria-label*="code"], input[id*="totpPin"]` |
+| `video_player` | `#movie_player, .html5-video-player` |
+| `like_button` | `ytd-like-button-renderer button` |
+| `like_active` | `ytd-like-button-renderer button[aria-pressed="true"]` |
+| `subscribe_btn` | `yt-subscribe-button-view-model button, #subscribe-button button` |
+| `subscribed_badge` | `button[aria-label*="Subscribed"], yt-subscribe-button-view-model button[subscribed]` |
+| `comment_box` | `#simplebox-placeholder, ytd-comment-simplebox-renderer` |
+| `comment_input` | `#contenteditable-root, div[contenteditable="true"]` |
+| `comment_submit` | `#submit-button, ytd-button-renderer#submit-button` |
+
+### `checkForDetection(page)` → `string | null`
+
+| Return | Trigger |
+|---|---|
+| `'challenge'` | URL `accounts.google.com/signin/v2/challenge` |
+| `'action_block'` | Text `quota exceeded`, `too many requests` |
+| `'disabled'` | Text `account has been terminated` |
+| `null` | Tidak ada deteksi |
+
+### Actions
+
+#### `login(page, account)` → `{ success, event? }`
+
+Navigate ke `accounts.google.com/signin` → type email → Next → type password → Next → optional TOTP (via `generateTOTP` dari instagram.js) → redirect ke YouTube.
+
+#### `scrollFeed(page, { seconds? })` → `{ success: true }`
+
+Navigate ke youtube.com. Hover video cards dengan `scrollToElementHandle`. Scroll selama `seconds` detik.
+
+#### `watchVideo(page, videoUrl)` → `{ success, event? }`
+
+Navigate ke video. Tunggu `rand(15000, 90000)` ms (simulasi watch time). Rate-type: `watch_reel`.
+
+#### `likeVideo(page, videoUrl)` → `{ success, event?, alreadyLiked? }`
+
+Navigate ke video. Cek `like_active`. Scroll ke like button, klik. Rate-type: `like`.
+
+#### `subscribeChannel(page, channelUrl)` → `{ success, event?, alreadySubscribed? }`
+
+Navigate ke channel URL. Cek `subscribed_badge`. Click `subscribe_btn`. Rate-type: `follow`.
+
+#### `commentVideo(page, videoUrl, text)` → `{ success, event? }`
+
+Navigate ke video. Scroll ke comment section. Click `comment_box` → `comment_input`. `humanType`. Click `comment_submit`. Rate-type: `comment`.
+
+---
+
+## Platform: Threads (`platforms/threads.js`)
+
+### Selector Registry
+
+| Key | Selector |
+|---|---|
+| `username_input` | `input[autocomplete="username"], input[name="username"]` |
+| `password_input` | `input[type="password"]` |
+| `login_button` | `div[role="button"]:has-text("Log in"), button[type="submit"]` |
+| `two_fa_input` | `input[aria-label*="Security code"], input[name="verificationCode"]` |
+| `like_button` | `svg[aria-label="Like"], div[role="button"][aria-label*="Like"]` |
+| `unlike_button` | `svg[aria-label="Unlike"]` |
+| `follow_button` | `div[role="button"]:has-text("Follow"):not(:has-text("Following"))` |
+| `following_badge` | `div[role="button"]:has-text("Following")` |
+| `unfollow_confirm` | `div[role="button"]:has-text("Unfollow")` |
+| `reply_button` | `svg[aria-label="Reply"]` |
+| `reply_textarea` | `div[contenteditable="true"][aria-label*="reply"], div[role="textbox"]` |
+| `post_submit` | `div[role="button"]:has-text("Post")` |
+
+### `checkForDetection(page)` → `string | null`
+
+| Return | Trigger |
+|---|---|
+| `'challenge'` | URL `/challenge` atau text `We suspended your account` |
+| `'disabled'` | Text `Your account has been disabled` |
+| `'action_block'` | Text `Action Blocked` atau `Try again later` |
+| `'login_required'` | URL `/login` + text `incorrect` |
+| `null` | Tidak ada deteksi |
+
+### Actions
+
+#### `login(page, account)` → `{ success, event? }`
+
+Navigate ke `threads.net/login`. Instagram credentials. Cookie consent. Optional 2FA TOTP via `require('./instagram').generateTOTP`.
+
+#### `scrollFeed` · `likePost` · `followUser` · `unfollowUser`
+
+Same pattern seperti instagram.js. Profile URL: `threads.net/@{username}`.
+
+#### `comment(page, postUrl, text)` → `{ success, event? }`
+
+Navigate ke post. Click `reply_button`. Type ke `reply_textarea`. Click `post_submit` atau Ctrl+Enter.
+
+---
+
+## Platform: Facebook (`platforms/facebook.js`)
+
+### Selector Registry
+
+| Key | Selector |
+|---|---|
+| `email_input` | `input[name="email"]` |
+| `password_input` | `input[name="pass"]` |
+| `login_button` | `button[name="login"]` |
+| `cookie_accept` | `button[title="Allow all cookies"]` |
+| `cookie_decline` | `button[data-cookiebanner="accept_only_essential_button"]` |
+| `like_button` | `[aria-label="Like"], [aria-label*="React"]` |
+| `liked_indicator` | `[aria-label="Remove Like"], [aria-pressed="true"][aria-label*="Like"]` |
+| `comment_button` | `[aria-label="Comment"]` |
+| `comment_input` | `[aria-label="Write a comment…"], [role="textbox"][aria-label*="comment"]` |
+| `follow_button` | `[aria-label="Follow"], button:has-text("Follow")` |
+| `following_badge` | `[aria-label="Following"], button:has-text("Following")` |
+| `add_friend_btn` | `[aria-label="Add friend"]` |
+
+### `checkForDetection(page)` → `string | null`
+
+| Return | Trigger |
+|---|---|
+| `'challenge'` | URL `/checkpoint/` atau text `account has been locked` |
+| `'disabled'` | Text `account has been disabled` atau `permanently disabled` |
+| `'action_block'` | Text `temporarily blocked` atau `You're Temporarily Blocked` |
+| `'login_required'` | URL `/login` + text `incorrect` / `password you entered` |
+| `null` | Tidak ada deteksi |
+
+### Actions
+
+#### `login(page, account)` → `{ success, event? }`
+
+Navigate ke facebook.com. Cookie consent (prefer decline). Type `email`/`username` + password. Click login. Verify URL not `/login`.
+
+#### `scrollFeed(page, { seconds? })` → `{ success: true }`
+
+Navigate ke facebook.com feed. humanScroll selama `seconds` detik (default `rand(30, 120)`).
+
+#### `likePost(page, postUrl)` → `{ success, event?, alreadyLiked? }`
+
+Navigate ke post URL. Cek `liked_indicator`. Scroll ke `like_button`. Click. Rate-type: `like`.
+
+#### `followUser(page, profileUrl)` → `{ success, event?, alreadyFollowing? }`
+
+Navigate ke `profileUrl`. Cek `following_badge`. Try `follow_button` (Pages) → fallback ke `add_friend_btn` (profiles). Rate-type: `follow`.
+
+#### `comment(page, postUrl, text)` → `{ success, event? }`
+
+Navigate ke post. Click `comment_button`. Type ke `comment_input`. Press Enter. Rate-type: `comment`.
+
+---
+
+## Instagram: postReel & postStory
+
+### New Selectors
+
+| Key | Selector |
+|---|---|
+| `create_btn` | `[aria-label="New post"], a[href*="/create"]` |
+| `post_file_input` | `input[type="file"]` |
+| `next_button` | `button:has-text("Next"), div[role="button"]:has-text("Next")` |
+| `share_button` | `button:has-text("Share"), div[role="button"]:has-text("Share")` |
+| `caption_input` | `div[aria-label*="Write a caption"], div[role="textbox"]` |
+| `reel_next` | `button:has-text("Next"), div[role="button"]:has-text("Next")` |
+
+### `postReel(page, { videoPath, caption, hashtags })` → `{ success, event? }`
+
+1. Click `create_btn` → wait for file input
+2. `waitForFileChooser()` → `setFiles([videoPath])`
+3. Click Next × 3 (edit → trim → details screens)
+4. Type `caption + '\n' + hashtags.join(' ')` ke `caption_input`
+5. Click `share_button` → wait for completion
+
+### `postStory(page, { mediaPath })` → `{ success, event? }`
+
+1. Navigate ke instagram.com/stories/create atau click + di home
+2. `waitForFileChooser()` → `setFiles([mediaPath])`
+3. Click `share_button`
+
+Rate-type untuk kedua action: `null` (tidak dihitung sebagai engagement action).

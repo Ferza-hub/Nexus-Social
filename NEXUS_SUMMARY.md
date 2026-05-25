@@ -211,7 +211,7 @@ humanScroll()   rand(80–350px) per scroll, 15% chance backscroll
 humanType()     per-char delay + pause random di spasi
 ```
 
-### Instagram Module (9 actions)
+### Instagram Module (11 actions)
 
 | Action | Deskripsi |
 |---|---|
@@ -224,10 +224,36 @@ humanType()     per-char delay + pause random di spasi
 | `commentPost` | Buka comment box, humanType, submit |
 | `watchReel` | Play reel 8–22s (20–90% durasi) |
 | `sendDM` | Search recipient, ketik pesan, kirim |
+| `postReel` | Upload video file via file-chooser, tambah caption + hashtag |
+| `postStory` | Upload media file via file-chooser, publish ke story |
 
 ### TikTok Module (6 actions)
 
 `login` · `watchVideo` · `likeVideo` · `followUser` · `commentVideo` · `scrollFYP`
+
+### Twitter/X Module (6 actions)
+
+`login` · `scrollFeed` · `likePost` · `followUser` · `unfollowUser` · `replyTweet`
+
+Login: multi-step flow (username → Next → optional phone/email challenge → password → Log in), detection via `data-testid` selectors.
+
+### YouTube Module (6 actions)
+
+`login` · `scrollFeed` · `watchVideo` · `likeVideo` · `subscribe` · `comment`
+
+Login: Google OAuth flow (accounts.google.com), TOTP 2FA support. `subscribe` maps to `follow` rate-type, `watchVideo` maps to `watch_reel` rate-type.
+
+### Threads Module (6 actions)
+
+`login` · `scrollFeed` · `likePost` · `followUser` · `unfollowUser` · `comment`
+
+Login: Instagram credentials + 2FA TOTP. Profile URL pattern: `threads.net/@username`.
+
+### Facebook Module (5 actions)
+
+`login` · `scrollFeed` · `likePost` · `followUser` · `comment`
+
+Login: cookie consent handling (prefer decline). `followUser` supports both Pages (Follow button) and profiles (Add Friend button).
 
 ### Target Discovery
 
