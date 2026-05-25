@@ -526,4 +526,5 @@ module.exports = {
   watchReel,
   sendDM,
   checkForDetection,
+  generateTOTP,
 };

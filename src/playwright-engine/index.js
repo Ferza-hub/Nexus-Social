@@ -7,6 +7,7 @@ const am = require('../account-manager/index');
 
 const instagram = require('./platforms/instagram');
 const tiktok    = require('./platforms/tiktok');
+const twitter   = require('./platforms/twitter');
 
 const log = makeLogger('PlaywrightEngine');
 
@@ -17,6 +18,7 @@ const log = makeLogger('PlaywrightEngine');
 const PLATFORMS = {
   instagram,
   tiktok,
+  twitter,
 };
 
 // ----------------------------------------------------------------
@@ -43,6 +45,14 @@ const ACTION_MAP = {
     follow:        { fn: 'followUser',   rateType: 'follow' },
     comment:       { fn: 'commentVideo', rateType: 'comment' },
     scroll_fyp:    { fn: 'scrollFYP',    rateType: null },
+  },
+  twitter: {
+    login:         { fn: 'login',        rateType: null },
+    scroll_feed:   { fn: 'scrollFeed',   rateType: null },
+    like_post:     { fn: 'likePost',     rateType: 'like' },
+    follow:        { fn: 'followUser',   rateType: 'follow' },
+    unfollow:      { fn: 'unfollowUser', rateType: 'unfollow' },
+    reply_tweet:   { fn: 'replyTweet',   rateType: 'comment' },
   },
 };
 
@@ -191,6 +201,16 @@ function _buildArgs(action, platform, account, params) {
       case 'follow':      return [params.username];
       case 'comment':     return [params.videoUrl, params.text];
       case 'scroll_fyp':  return [params];
+    }
+  }
+  if (platform === 'twitter') {
+    switch (action) {
+      case 'login':        return [account];
+      case 'scroll_feed':  return [params];
+      case 'like_post':    return [params.tweetUrl];
+      case 'follow':       return [params.username];
+      case 'unfollow':     return [params.username];
+      case 'reply_tweet':  return [params.tweetUrl, params.text];
     }
   }
   return [];
