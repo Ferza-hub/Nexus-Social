@@ -207,6 +207,16 @@ const AccountsPage = (() => {
     }
   }
 
+  const CONNECT_ERRORS = {
+    login_required:   'Wrong username or password',
+    challenge:        'Platform requires verification — check 2FA or solve captcha manually first',
+    disabled:         'Account has been disabled by the platform',
+    action_block:     'Account is temporarily blocked by the platform',
+    account_busy:     'Account is already running — try again in a moment',
+    concurrency_limit:'Too many concurrent sessions — try again shortly',
+    account_not_found:'Account not found',
+  };
+
   async function connect(id, btn) {
     btn.disabled = true;
     btn.textContent = 'Connecting…';
@@ -215,7 +225,8 @@ const AccountsPage = (() => {
       Toast.success('Account connected — session active');
       await reload();
     } catch (err) {
-      Toast.error(`Connect failed: ${err.message}`);
+      const msg = CONNECT_ERRORS[err.message] ?? `Connection failed: ${err.message}`;
+      Toast.error(msg);
       btn.disabled = false;
       btn.textContent = 'Connect';
     }
