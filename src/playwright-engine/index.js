@@ -3,7 +3,16 @@
 const { makeLogger } = require('../utils/logger');
 const { launchForAccount, isAccountBusy, isConcurrencyFull } = require('./browser');
 const { saveSession } = require('../account-manager/session-manager');
+const { setSpeedMode, isSpeedMode } = require('./human');
 const am = require('../account-manager/index');
+
+// Actions where behavioral quality matters — always run at normal speed
+// regardless of global speed mode setting.
+const INTERACTION_ACTIONS = new Set([
+  'comment', 'reply_tweet', 'dm',
+  'post_reel', 'post_story',
+  'login',
+]);
 
 const instagram = require('./platforms/instagram');
 const tiktok    = require('./platforms/tiktok');
@@ -155,9 +164,19 @@ async function executeAction(accountId, platform, action, params = {}) {
     }
 
     // ---- 4. Execute the action ----
-    const fn   = platformModule[actionDef.fn];
+    // Interaction actions (comment, DM, login, post) always run at normal
+    // speed regardless of global speed mode — behavioral quality matters there.
+    const fn = platformModule[actionDef.fn];
     const args = _buildArgs(action, platform, account, params);
-    const result = await fn(page, ...args);
+    const wasSpeed = isSpeedMode();
+    const forceNormal = INTERACTION_ACTIONS.has(action);
+    if (forceNormal && wasSpeed) setSpeedMode(false);
+    let result;
+    try {
+      result = await fn(page, ...args);
+    } finally {
+      if (forceNormal && wasSpeed) setSpeedMode(true);
+    }
 
     // ---- 5. Handle detection events ----
     if (!result.success && result.event) {
