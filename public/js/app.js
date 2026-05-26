@@ -7,6 +7,7 @@ const PAGES = {
   proxies:   ProxiesPage,
   analytics: AnalyticsPage,
   logs:      LogsPage,
+  settings:  SettingsPage,
 };
 
 let _currentPage = null;

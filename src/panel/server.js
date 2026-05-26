@@ -6,7 +6,7 @@ const express = require('express');
 const cors    = require('cors');
 const morgan  = require('morgan');
 
-const { requireAuth, loginHandler } = require('./middleware/auth');
+const { requireAuth, loginHandler, changePasswordHandler } = require('./middleware/auth');
 
 const app  = express();
 const PORT = process.env.PORT || 3001;
@@ -18,6 +18,7 @@ app.use(express.static(path.join(__dirname, '../../public')));
 
 // Auth
 app.post('/api/auth/login', loginHandler);
+app.post('/api/auth/change-password', requireAuth, changePasswordHandler);
 
 // OAuth callbacks — no auth required (redirect from external platform)
 app.use('/api/oauth', require('./routes/oauth'));

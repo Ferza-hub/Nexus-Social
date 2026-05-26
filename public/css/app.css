@@ -349,3 +349,17 @@ code {
   color: var(--text-2);
   margin: 2px;
 }
+
+/* ---------- settings ---------- */
+.settings-card {
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1.75rem;
+  max-width: 480px;
+}
+.settings-section-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-1);
+}

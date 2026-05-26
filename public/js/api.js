@@ -49,5 +49,7 @@ const API = (() => {
       setToken(data.token);
       return data;
     },
+    changePassword: (currentPassword, newPassword) =>
+      request('POST', '/api/auth/change-password', { currentPassword, newPassword }),
   };
 })();
