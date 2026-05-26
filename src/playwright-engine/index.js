@@ -168,12 +168,13 @@ async function executeAction(accountId, platform, action, params = {}) {
     }
 
     // ---- 4. Execute the action ----
-    // Interaction actions (comment, DM, login, post) always run at normal
-    // speed regardless of global speed mode — behavioral quality matters there.
+    // Force normal timing when:
+    // - action is an interaction (comment, DM, post, login) — quality matters
+    // - account is still warming up — natural behavior is critical during warmup
     const fn = platformModule[actionDef.fn];
     const args = _buildArgs(action, platform, account, params);
     const wasSpeed = isSpeedMode();
-    const forceNormal = INTERACTION_ACTIONS.has(action);
+    const forceNormal = INTERACTION_ACTIONS.has(action) || account.status === 'warming';
     if (forceNormal && wasSpeed) setSpeedMode(false);
     let result;
     try {
