@@ -6,7 +6,7 @@ const { getAuthUrl, handleCallback, loadToken, deleteToken } = require('../../ap
 const router = Router();
 
 function callbackUri(req, platform) {
-  const base = process.env.PANEL_URL || `http://localhost:${process.env.PORT || 3001}`;
+  const base = process.env.PANEL_URL || `http://localhost:${process.env.PORT || 3003}`;
   return `${base}/api/oauth/callback/${platform}`;
 }
 
