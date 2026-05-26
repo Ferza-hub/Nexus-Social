@@ -110,6 +110,8 @@ const CampaignsPage = (() => {
     try { accounts = await API.get('/api/accounts?status=active'); } catch (_) {}
 
     Modal.open('New Campaign', `
+      <!-- platform options populated on open -->
+
       <div class="form-group">
         <label>Campaign Name</label>
         <input type="text" id="c-name" placeholder="My Instagram Growth">
@@ -123,10 +125,13 @@ const CampaignsPage = (() => {
         </div>
         <div class="form-group">
           <label>Platform</label>
-          <select id="c-platform">
+          <select id="c-platform" onchange="CampaignsPage._onPlatformChange()">
             <option value="instagram">Instagram</option>
             <option value="tiktok">TikTok</option>
             <option value="twitter">Twitter/X</option>
+            <option value="youtube">YouTube</option>
+            <option value="facebook">Facebook</option>
+            <option value="threads">Threads</option>
           </select>
         </div>
       </div>
@@ -148,24 +153,15 @@ const CampaignsPage = (() => {
         <div class="form-row">
           <div class="form-group">
             <label>Action</label>
-            <select id="c-action">
-              <option value="follow">Follow</option>
-              <option value="like_post">Like Post</option>
-              <option value="comment">Comment</option>
-              <option value="watch_story">Watch Story</option>
-            </select>
+            <select id="c-action"></select>
           </div>
           <div class="form-group">
             <label>Target type</label>
-            <select id="c-target-type">
-              <option value="hashtag">Hashtag</option>
-              <option value="competitor">Competitor followers</option>
-              <option value="explore">Explore</option>
-            </select>
+            <select id="c-target-type"></select>
           </div>
         </div>
         <div class="form-group">
-          <label>Target value (hashtag name or @username)</label>
+          <label>Target value (hashtag, @username, or keyword)</label>
           <input type="text" id="c-target-value" placeholder="photography">
         </div>
         <div class="form-group">
@@ -177,12 +173,95 @@ const CampaignsPage = (() => {
         <button class="btn btn-ghost" onclick="Modal.close()">Cancel</button>
         <button class="btn btn-primary" onclick="CampaignsPage._submitCreate()">Create Campaign</button>
       </div>`);
+    // Populate action + target dropdowns for default platform
+    setTimeout(_onPlatformChange, 0);
+  }
+
+  const PLATFORM_ACTIONS = {
+    instagram: [
+      { value: 'follow',      label: 'Follow' },
+      { value: 'unfollow',    label: 'Unfollow' },
+      { value: 'like_post',   label: 'Like Post' },
+      { value: 'watch_story', label: 'Watch Story' },
+      { value: 'watch_reel',  label: 'Watch Reel' },
+      { value: 'comment',     label: 'Comment' },
+    ],
+    tiktok: [
+      { value: 'follow',      label: 'Follow' },
+      { value: 'like_video',  label: 'Like Video' },
+      { value: 'watch_video', label: 'Watch Video' },
+      { value: 'comment',     label: 'Comment' },
+    ],
+    twitter: [
+      { value: 'follow',       label: 'Follow' },
+      { value: 'unfollow',     label: 'Unfollow' },
+      { value: 'like_post',    label: 'Like Post' },
+      { value: 'reply_tweet',  label: 'Reply' },
+    ],
+    youtube: [
+      { value: 'subscribe',   label: 'Subscribe' },
+      { value: 'like_video',  label: 'Like Video' },
+      { value: 'watch_video', label: 'Watch Video' },
+      { value: 'comment',     label: 'Comment' },
+    ],
+    facebook: [
+      { value: 'follow',    label: 'Follow / Add Friend' },
+      { value: 'like_post', label: 'Like Post' },
+      { value: 'comment',   label: 'Comment' },
+    ],
+    threads: [
+      { value: 'follow',    label: 'Follow' },
+      { value: 'unfollow',  label: 'Unfollow' },
+      { value: 'like_post', label: 'Like Post' },
+      { value: 'comment',   label: 'Comment' },
+    ],
+  };
+
+  const PLATFORM_TARGETS = {
+    instagram: [
+      { value: 'hashtag',    label: 'Hashtag' },
+      { value: 'competitor', label: 'Competitor followers' },
+      { value: 'explore',    label: 'Explore' },
+    ],
+    tiktok: [
+      { value: 'hashtag',    label: 'Hashtag' },
+      { value: 'competitor', label: 'Creator followers' },
+    ],
+    twitter: [
+      { value: 'hashtag',    label: 'Hashtag' },
+      { value: 'competitor', label: 'Competitor followers' },
+    ],
+    youtube: [
+      { value: 'keyword',    label: 'Keyword / topic' },
+      { value: 'competitor', label: 'Channel subscribers' },
+    ],
+    facebook: [
+      { value: 'hashtag',    label: 'Hashtag / topic' },
+      { value: 'competitor', label: 'Page followers' },
+    ],
+    threads: [
+      { value: 'hashtag',    label: 'Hashtag' },
+      { value: 'competitor', label: 'Competitor followers' },
+    ],
+  };
+
+  function _onPlatformChange() {
+    const platform = document.getElementById('c-platform')?.value;
+    const actionSel = document.getElementById('c-action');
+    const targetSel = document.getElementById('c-target-type');
+    if (!actionSel || !targetSel || !platform) return;
+
+    actionSel.innerHTML = (PLATFORM_ACTIONS[platform] || [])
+      .map(a => `<option value="${a.value}">${a.label}</option>`).join('');
+    targetSel.innerHTML = (PLATFORM_TARGETS[platform] || [])
+      .map(t => `<option value="${t.value}">${t.label}</option>`).join('');
   }
 
   function _toggleConfigFields() {
     const type = document.getElementById('c-type')?.value;
     const growthCfg = document.getElementById('c-growth-config');
     if (growthCfg) growthCfg.style.display = type === 'content' ? 'none' : '';
+    _onPlatformChange();
   }
 
   async function _submitCreate() {
@@ -214,5 +293,5 @@ const CampaignsPage = (() => {
     } catch (err) { Toast.error(err.message); }
   }
 
-  return { render, reload, setStatus, remove, showLogs, create, _submitCreate, _toggleConfigFields };
+  return { render, reload, setStatus, remove, showLogs, create, _submitCreate, _toggleConfigFields, _onPlatformChange };
 })();
