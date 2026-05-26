@@ -414,3 +414,13 @@ code {
   transform: translateX(20px);
   background: #fff;
 }
+
+/* ---------- session connect button ---------- */
+.session-connect-btn {
+  color: var(--accent);
+  border-color: var(--accent);
+  font-size: 11px;
+  padding: 2px 8px;
+}
+.session-connect-btn:hover { background: color-mix(in srgb, var(--accent) 15%, transparent); }
+.session-connect-btn:disabled { opacity: .5; cursor: not-allowed; }

@@ -3,6 +3,8 @@
 const { Router } = require('express');
 const am = require('../../account-manager/index');
 const { logEvent, getAccountHealth, getAlerts } = require('../../account-manager/health-monitor');
+const { loginAndSaveSession } = require('../../playwright-engine/index');
+const { hasActiveSession } = require('../../account-manager/session-manager');
 const { hasActiveSession } = require('../../account-manager/session-manager');
 const { getUsage } = require('../../account-manager/rate-limiter');
 const { runMigrations } = require('../../database/schema');
@@ -46,6 +48,24 @@ router.post('/', (req, res) => {
     }
     const id = am.addAccount({ username, password, email, phone, platform, proxyId, twoFaSecret, notes, skipWarmup: !!skipWarmup });
     res.status(201).json({ id });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/accounts/:id/connect — trigger Playwright login + save session
+router.post('/:id/connect', async (req, res) => {
+  try {
+    const acc = am.getAccount(Number(req.params.id));
+    if (!acc) return res.status(404).json({ error: 'Account not found' });
+    if (acc.status === 'disabled') return res.status(400).json({ error: 'Account is disabled' });
+
+    const result = await loginAndSaveSession(acc.id, acc.platform);
+    if (!result.success) {
+      return res.status(400).json({ error: result.event ?? result.reason ?? 'Login failed' });
+    }
+
+    res.json({ ok: true, session_active: hasActiveSession(acc.id, acc.platform) });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

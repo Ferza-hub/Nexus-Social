@@ -5,10 +5,10 @@ const AccountsPage = (() => {
     return `<span class="badge badge-${status}">${status}</span>`;
   }
 
-  function sessionBadge(active) {
+  function sessionBadge(active, accountId) {
     return active
-      ? `<span class="session-dot session-dot--on" title="Session active">● Connected</span>`
-      : `<span class="session-dot session-dot--off" title="No session — login required">○ No session</span>`;
+      ? `<span class="session-dot session-dot--on">● Connected</span>`
+      : `<button class="btn btn-ghost btn-sm session-connect-btn" onclick="AccountsPage.connect(${accountId}, this)">Connect</button>`;
   }
 
   function warmupBar(warmup) {
@@ -42,7 +42,7 @@ const AccountsPage = (() => {
                 <td><strong>${acc.username}</strong>${acc.email ? `<br><span class="text-muted text-sm">${acc.email}</span>` : ''}</td>
                 <td><span class="tag">${acc.platform}</span></td>
                 <td>${badge(acc.status)}</td>
-                <td>${sessionBadge(acc.session_active)}</td>
+                <td>${sessionBadge(acc.session_active, acc.id)}</td>
                 <td>${warmupBar(acc.warmup)}</td>
                 <td>${acc.api_connected ? '<span class="text-success">✓</span>' : '<span class="text-muted">—</span>'}</td>
                 <td>
@@ -207,5 +207,19 @@ const AccountsPage = (() => {
     }
   }
 
-  return { render, reload, add, _submitAdd, remove, showHealth, showUsage };
+  async function connect(id, btn) {
+    btn.disabled = true;
+    btn.textContent = 'Connecting…';
+    try {
+      await API.post(`/api/accounts/${id}/connect`, {});
+      Toast.success('Account connected — session active');
+      await reload();
+    } catch (err) {
+      Toast.error(`Connect failed: ${err.message}`);
+      btn.disabled = false;
+      btn.textContent = 'Connect';
+    }
+  }
+
+  return { render, reload, add, _submitAdd, remove, showHealth, showUsage, connect };
 })();
