@@ -119,6 +119,18 @@ const AccountsPage = (() => {
         <label>Notes</label>
         <input type="text" id="acc-notes">
       </div>
+      <div class="form-group" style="background:var(--bg-2);border-radius:6px;padding:.75rem 1rem">
+        <label class="toggle-label">
+          <div>
+            <div style="font-weight:500">Established account</div>
+            <div class="text-muted text-sm">Account already has activity history — skip warmup and start immediately</div>
+          </div>
+          <div class="toggle-wrap">
+            <input type="checkbox" id="acc-skip-warmup">
+            <span class="toggle-slider"></span>
+          </div>
+        </label>
+      </div>
       <div class="flex gap-1" style="justify-content:flex-end">
         <button class="btn btn-ghost" onclick="Modal.close()">Cancel</button>
         <button class="btn btn-primary" onclick="AccountsPage._submitAdd()">Add Account</button>
@@ -134,6 +146,7 @@ const AccountsPage = (() => {
       phone:        document.getElementById('acc-phone').value.trim() || undefined,
       twoFaSecret:  document.getElementById('acc-2fa').value.trim() || undefined,
       notes:        document.getElementById('acc-notes').value.trim() || undefined,
+      skipWarmup:   document.getElementById('acc-skip-warmup').checked,
     };
     if (!body.username || !body.password) return Toast.error('Username and password required');
     try {

@@ -16,19 +16,27 @@ const log = makeLogger('AccountManager');
 // Account CRUD
 // ----------------------------------------------------------------
 
-function addAccount({ username, password, email, phone, platform, proxyId, twoFaSecret, notes }) {
+function addAccount({ username, password, email, phone, platform, proxyId, twoFaSecret, notes, skipWarmup = false }) {
   const db = getDb();
   const now = new Date().toISOString();
 
+  // Established accounts (skipWarmup=true) start as 'active' — they already
+  // have platform trust history so warmup is unnecessary.
+  // New/fresh accounts start as 'warming' per the warmup state machine.
+  const initialStatus = skipWarmup ? 'active' : 'new';
+
   const result = db.prepare(`
-    INSERT INTO accounts (username, password, email, phone, platform, proxy_id, two_fa_secret, notes, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(username, password, email ?? null, phone ?? null, platform, proxyId ?? null, twoFaSecret ?? null, notes ?? null, now, now);
+    INSERT INTO accounts (username, password, email, phone, platform, proxy_id, two_fa_secret, notes, status, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(username, password, email ?? null, phone ?? null, platform, proxyId ?? null, twoFaSecret ?? null, notes ?? null, initialStatus, now, now);
 
   const accountId = result.lastInsertRowid;
-  warmupScheduler.initWarmup(accountId, platform);
 
-  log.info('Account added', { accountId, username, platform });
+  if (!skipWarmup) {
+    warmupScheduler.initWarmup(accountId, platform);
+  }
+
+  log.info('Account added', { accountId, username, platform, skipWarmup });
   return accountId;
 }
 

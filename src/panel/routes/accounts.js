@@ -40,11 +40,11 @@ router.get('/', (req, res) => {
 // POST /api/accounts
 router.post('/', (req, res) => {
   try {
-    const { username, password, email, phone, platform, proxyId, twoFaSecret, notes } = req.body;
+    const { username, password, email, phone, platform, proxyId, twoFaSecret, notes, skipWarmup } = req.body;
     if (!username || !password || !platform) {
       return res.status(400).json({ error: 'username, password, platform required' });
     }
-    const id = am.addAccount({ username, password, email, phone, platform, proxyId, twoFaSecret, notes });
+    const id = am.addAccount({ username, password, email, phone, platform, proxyId, twoFaSecret, notes, skipWarmup: !!skipWarmup });
     res.status(201).json({ id });
   } catch (err) {
     res.status(500).json({ error: err.message });
