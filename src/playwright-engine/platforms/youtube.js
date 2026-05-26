@@ -36,6 +36,10 @@ const SEL = {
   comment_submit:   '#submit-button',
   sort_comments:    'yt-sort-filter-sub-menu-renderer',
 
+  // Share
+  share_button:     'button[aria-label="Share"], ytd-button-renderer button:has-text("Share")',
+  share_copy_link:  'button[aria-label="Copy link"], yt-copy-link-renderer button',
+
   // Feed
   video_renderer:   'ytd-rich-item-renderer, ytd-compact-video-renderer',
   video_link:       'a#video-title',
@@ -325,6 +329,48 @@ async function scrollFeed(page, { seconds = null } = {}) {
   return { success: true };
 }
 
+// ----------------------------------------------------------------
+// shareVideo — opens share panel and copies link (registers as share event)
+// ----------------------------------------------------------------
+
+async function shareVideo(page, videoUrl) {
+  log.debug('Sharing video', { videoUrl });
+
+  await page.goto(videoUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
+  await h.waitForLoad(page);
+  await h.preAction();
+
+  const detection = await checkForDetection(page);
+  if (detection) return { success: false, event: detection };
+
+  const shareBtn = page.locator(SEL.share_button).first();
+  if (await shareBtn.count() === 0) {
+    return { success: false, event: 'warning', message: 'Share button not found' };
+  }
+
+  await h.scrollToElementHandle(page, await shareBtn.elementHandle());
+  await h.shortPause();
+  await shareBtn.click();
+  await h.delay(h.randInt(800, 1500));
+
+  // Click "Copy link" — registers the share interaction server-side
+  const copyBtn = page.locator(SEL.share_copy_link).first();
+  if (await copyBtn.count() > 0) {
+    await copyBtn.click();
+    await h.delay(h.randInt(500, 1000));
+  }
+
+  // Dismiss panel with Escape
+  await page.keyboard.press('Escape');
+
+  const d2 = await checkForDetection(page);
+  if (d2) return { success: false, event: d2 };
+
+  log.debug('Video shared', { videoUrl });
+  await h.postAction();
+  return { success: true };
+}
+
 module.exports = {
   login,
   watchVideo,
@@ -332,5 +378,6 @@ module.exports = {
   subscribeChannel,
   commentVideo,
   scrollFeed,
+  shareVideo,
   checkForDetection,
 };

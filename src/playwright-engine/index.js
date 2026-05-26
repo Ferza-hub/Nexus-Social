@@ -78,6 +78,7 @@ const ACTION_MAP = {
     like_video:    { fn: 'likeVideo',         rateType: 'like' },
     subscribe:     { fn: 'subscribeChannel',  rateType: 'follow' },
     comment:       { fn: 'commentVideo',      rateType: 'comment' },
+    share:         { fn: 'shareVideo',        rateType: null },
   },
   threads: {
     login:         { fn: 'login',        rateType: null },
@@ -93,6 +94,9 @@ const ACTION_MAP = {
     like_post:     { fn: 'likePost',     rateType: 'like' },
     follow:        { fn: 'followUser',   rateType: 'follow' },
     comment:       { fn: 'comment',      rateType: 'comment' },
+    watch_reel:    { fn: 'watchReel',    rateType: 'watch_reel' },
+    like_reel:     { fn: 'likeReel',     rateType: 'like' },
+    share:         { fn: 'sharePost',    rateType: null },
   },
   // instagram additions (already has entries above — merge here)
 };
@@ -293,6 +297,7 @@ function _buildArgs(action, platform, account, params) {
       case 'like_video':   return [params.videoUrl];
       case 'subscribe':    return [params.channelUrl];
       case 'comment':      return [params.videoUrl, params.text];
+      case 'share':        return [params.videoUrl];
     }
   }
   if (platform === 'threads') {
@@ -312,6 +317,9 @@ function _buildArgs(action, platform, account, params) {
       case 'like_post':    return [params.postUrl];
       case 'follow':       return [params.profileUrl];
       case 'comment':      return [params.postUrl, params.text];
+      case 'watch_reel':   return [params.reelUrl];
+      case 'like_reel':    return [params.reelUrl];
+      case 'share':        return [params.postUrl];
     }
   }
   // instagram post_reel / post_story additions

@@ -39,6 +39,16 @@ const SEL = {
   add_friend_btn:   '[aria-label="Add friend"]',
   friend_sent_btn:  '[aria-label="Cancel friend request"], button:has-text("Requested")',
 
+  // Reels
+  reel_like_button:   '[aria-label="Like"][role="button"], [aria-label*="React"][role="button"]',
+  reel_liked:         '[aria-label="Remove Like"][role="button"]',
+  reel_share_button:  '[aria-label="Send this to friends or post it on your timeline."], [aria-label*="Share"]',
+  reel_share_confirm: 'button:has-text("Share to Feed"), button:has-text("Share now")',
+
+  // Share (posts)
+  share_button:     '[aria-label="Send this to friends or post it on your timeline."], [data-testid="share_action_button"], [aria-label*="Share"]',
+  share_now:        'button:has-text("Share now"), div[role="button"]:has-text("Share now")',
+
   // Profile
   cover_photo:      '[data-pagelet="ProfileTilesFeed"]',
 };
@@ -241,11 +251,110 @@ async function comment(page, postUrl, text) {
   return { success: true };
 }
 
+// ----------------------------------------------------------------
+// 6. watchReel
+// ----------------------------------------------------------------
+
+async function watchReel(page, reelUrl) {
+  log.debug('Watching reel', { reelUrl });
+
+  await page.goto(reelUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
+  await h.waitForLoad(page);
+  await h.preAction();
+
+  const detection = await checkForDetection(page);
+  if (detection) return { success: false, event: detection };
+
+  // Watch for a human-like duration
+  await h.delay(h.randInt(8000, 30000));
+
+  log.debug('Reel watched', { reelUrl });
+  await h.postAction();
+  return { success: true };
+}
+
+// ----------------------------------------------------------------
+// 7. likeReel
+// ----------------------------------------------------------------
+
+async function likeReel(page, reelUrl) {
+  log.debug('Liking reel', { reelUrl });
+
+  await page.goto(reelUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
+  await h.waitForLoad(page);
+  await h.preAction();
+
+  const alreadyLiked = await page.$(SEL.reel_liked);
+  if (alreadyLiked) return { success: true, alreadyLiked: true };
+
+  const detection = await checkForDetection(page);
+  if (detection) return { success: false, event: detection };
+
+  const likeBtn = page.locator(SEL.reel_like_button).first();
+  if (await likeBtn.count() === 0) {
+    return { success: false, event: 'warning', message: 'Reel like button not found' };
+  }
+
+  await h.scrollToElementHandle(page, await likeBtn.elementHandle());
+  await h.shortPause();
+  await likeBtn.click();
+  await h.delay(h.randInt(600, 1200));
+
+  const d2 = await checkForDetection(page);
+  if (d2) return { success: false, event: d2 };
+
+  log.debug('Reel liked', { reelUrl });
+  await h.postAction();
+  return { success: true };
+}
+
+// ----------------------------------------------------------------
+// 8. sharePost — share a post or reel to own timeline
+// ----------------------------------------------------------------
+
+async function sharePost(page, postUrl) {
+  log.debug('Sharing post', { postUrl });
+
+  await page.goto(postUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
+  await h.waitForLoad(page);
+  await h.preAction();
+
+  const detection = await checkForDetection(page);
+  if (detection) return { success: false, event: detection };
+
+  const shareBtn = page.locator(SEL.share_button).first();
+  if (await shareBtn.count() === 0) {
+    return { success: false, event: 'warning', message: 'Share button not found' };
+  }
+
+  await h.scrollToElementHandle(page, await shareBtn.elementHandle());
+  await h.shortPause();
+  await shareBtn.click();
+  await h.delay(h.randInt(800, 1500));
+
+  // Click "Share now" in the dropdown/modal
+  const shareNow = page.locator(SEL.share_now).first();
+  if (await shareNow.count() > 0) {
+    await shareNow.click();
+    await h.delay(h.randInt(1000, 2000));
+  }
+
+  const d2 = await checkForDetection(page);
+  if (d2) return { success: false, event: d2 };
+
+  log.debug('Post shared', { postUrl });
+  await h.postAction();
+  return { success: true };
+}
+
 module.exports = {
   login,
   scrollFeed,
   likePost,
   followUser,
   comment,
+  watchReel,
+  likeReel,
+  sharePost,
   checkForDetection,
 };
