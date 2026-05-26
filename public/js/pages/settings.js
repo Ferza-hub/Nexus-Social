@@ -1,11 +1,26 @@
-// Settings page — change panel password
+// Settings page — change password + speed mode
 
 const SettingsPage = (() => {
 
-  function render() {
+  async function render() {
     document.getElementById('page-container').innerHTML = `
       <div class="page-header">
         <h1 class="page-title">Settings</h1>
+      </div>
+
+      <div class="settings-card" style="margin-bottom:1.5rem">
+        <h2 class="settings-section-title">Speed Mode</h2>
+        <p class="text-muted mt-1" style="margin-bottom:1.25rem">
+          When enabled, all human-like delays are removed for instant action execution.
+          Use only if detection risk is acceptable.
+        </p>
+        <label class="toggle-label" id="speed-mode-row">
+          <span id="speed-mode-text">Loading…</span>
+          <div class="toggle-wrap">
+            <input type="checkbox" id="speed-mode-toggle" onchange="SettingsPage.toggleSpeedMode(this.checked)">
+            <span class="toggle-slider"></span>
+          </div>
+        </label>
       </div>
 
       <div class="settings-card">
@@ -33,13 +48,19 @@ const SettingsPage = (() => {
       </div>
     `;
 
+    // Load current speed mode state
+    try {
+      const s = await API.get('/api/settings');
+      _applySpeedMode(s.speed_mode);
+    } catch (_) {}
+
     document.getElementById('change-pw-form').addEventListener('submit', async (e) => {
       e.preventDefault();
-      const current  = document.getElementById('cp-current').value;
-      const newPw    = document.getElementById('cp-new').value;
-      const confirm  = document.getElementById('cp-confirm').value;
-      const errEl    = document.getElementById('cp-error');
-      const btn      = document.getElementById('cp-btn');
+      const current = document.getElementById('cp-current').value;
+      const newPw   = document.getElementById('cp-new').value;
+      const confirm = document.getElementById('cp-confirm').value;
+      const errEl   = document.getElementById('cp-error');
+      const btn     = document.getElementById('cp-btn');
 
       errEl.classList.add('hidden');
 
@@ -73,5 +94,24 @@ const SettingsPage = (() => {
     });
   }
 
-  return { render };
+  function _applySpeedMode(enabled) {
+    const toggle = document.getElementById('speed-mode-toggle');
+    const text   = document.getElementById('speed-mode-text');
+    if (!toggle) return;
+    toggle.checked = enabled;
+    text.textContent = enabled ? 'Speed Mode: ON — delays disabled' : 'Speed Mode: OFF — human timing active';
+    text.style.color = enabled ? 'var(--warning)' : 'var(--text-1)';
+  }
+
+  async function toggleSpeedMode(enabled) {
+    try {
+      const s = await API.post('/api/settings', { speed_mode: enabled });
+      _applySpeedMode(s.speed_mode);
+      Toast.show(`Speed mode ${s.speed_mode ? 'enabled' : 'disabled'}`, s.speed_mode ? 'warning' : 'success');
+    } catch (err) {
+      Toast.error(err.message);
+    }
+  }
+
+  return { render, toggleSpeedMode };
 })();

@@ -363,3 +363,54 @@ code {
   font-weight: 600;
   color: var(--text-1);
 }
+
+/* ---------- session indicator ---------- */
+.session-dot { font-size: 12px; white-space: nowrap; }
+.session-dot--on  { color: var(--success); }
+.session-dot--off { color: var(--text-3); }
+
+/* ---------- toggle switch ---------- */
+.toggle-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  cursor: pointer;
+  user-select: none;
+}
+.toggle-wrap {
+  position: relative;
+  flex-shrink: 0;
+  width: 44px;
+  height: 24px;
+}
+.toggle-wrap input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+  position: absolute;
+}
+.toggle-slider {
+  position: absolute;
+  inset: 0;
+  background: var(--bg-3);
+  border-radius: 24px;
+  transition: background .2s;
+  cursor: pointer;
+}
+.toggle-slider::before {
+  content: '';
+  position: absolute;
+  left: 3px;
+  top: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--text-2);
+  transition: transform .2s, background .2s;
+}
+.toggle-wrap input:checked + .toggle-slider { background: var(--warning); }
+.toggle-wrap input:checked + .toggle-slider::before {
+  transform: translateX(20px);
+  background: #fff;
+}

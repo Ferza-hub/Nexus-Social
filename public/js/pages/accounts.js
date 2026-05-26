@@ -5,6 +5,12 @@ const AccountsPage = (() => {
     return `<span class="badge badge-${status}">${status}</span>`;
   }
 
+  function sessionBadge(active) {
+    return active
+      ? `<span class="session-dot session-dot--on" title="Session active">● Connected</span>`
+      : `<span class="session-dot session-dot--off" title="No session — login required">○ No session</span>`;
+  }
+
   function warmupBar(warmup) {
     if (!warmup || warmup.completed) return '<span class="text-muted">—</span>';
     const pct = Math.min(100, Math.round((warmup.current_day / 15) * 100));
@@ -27,7 +33,7 @@ const AccountsPage = (() => {
         <table>
           <thead><tr>
             <th>#</th><th>Username</th><th>Platform</th><th>Status</th>
-            <th>Warmup</th><th>API</th><th>Actions</th>
+            <th>Session</th><th>Warmup</th><th>API</th><th>Actions</th>
           </tr></thead>
           <tbody>
             ${accounts.map(acc => `
@@ -36,6 +42,7 @@ const AccountsPage = (() => {
                 <td><strong>${acc.username}</strong>${acc.email ? `<br><span class="text-muted text-sm">${acc.email}</span>` : ''}</td>
                 <td><span class="tag">${acc.platform}</span></td>
                 <td>${badge(acc.status)}</td>
+                <td>${sessionBadge(acc.session_active)}</td>
                 <td>${warmupBar(acc.warmup)}</td>
                 <td>${acc.api_connected ? '<span class="text-success">✓</span>' : '<span class="text-muted">—</span>'}</td>
                 <td>

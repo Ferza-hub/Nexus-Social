@@ -156,4 +156,14 @@ module.exports = {
   invalidateSession,
   getExpiringAccounts,
   deleteSession,
+  hasActiveSession,
 };
+
+function hasActiveSession(accountId, platform) {
+  const row = getDb().prepare(`
+    SELECT is_valid, expires_at FROM sessions
+    WHERE account_id = ? AND platform = ? AND is_valid = 1
+  `).get(accountId, platform);
+  if (!row) return false;
+  return new Date(row.expires_at) > new Date();
+}

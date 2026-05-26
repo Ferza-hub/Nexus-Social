@@ -3,6 +3,7 @@
 const { Router } = require('express');
 const am = require('../../account-manager/index');
 const { logEvent, getAccountHealth, getAlerts } = require('../../account-manager/health-monitor');
+const { hasActiveSession } = require('../../account-manager/session-manager');
 const { getUsage } = require('../../account-manager/rate-limiter');
 const { runMigrations } = require('../../database/schema');
 const { getDb } = require('../../database/db');
@@ -23,10 +24,11 @@ router.get('/', (req, res) => {
         .get(acc.id, acc.platform);
       return {
         ...acc,
-        password:     undefined, // never expose
-        two_fa_secret: undefined,
-        warmup:       warmup ?? null,
-        api_connected: !!hasToken,
+        password:       undefined, // never expose
+        two_fa_secret:  undefined,
+        warmup:         warmup ?? null,
+        api_connected:  !!hasToken,
+        session_active: hasActiveSession(acc.id, acc.platform),
       };
     });
     res.json(enriched);

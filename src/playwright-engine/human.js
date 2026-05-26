@@ -3,7 +3,18 @@
 // Human behavior simulation layer
 // All delays MUST use rand(min, max) — never hardcoded values
 
+let _speedMode = (process.env.SPEED_MODE === 'true');
+
+function setSpeedMode(enabled) {
+  _speedMode = !!enabled;
+}
+
+function isSpeedMode() {
+  return _speedMode;
+}
+
 function randInt(min, max) {
+  if (_speedMode) return 0;
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
@@ -183,4 +194,6 @@ module.exports = {
   humanType,
   humanScroll,
   waitForLoad,
+  setSpeedMode,
+  isSpeedMode,
 };
