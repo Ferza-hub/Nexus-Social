@@ -11,8 +11,9 @@ const SettingsPage = (() => {
       <div class="settings-card" style="margin-bottom:1.5rem">
         <h2 class="settings-section-title">Speed Mode</h2>
         <p class="text-muted mt-1" style="margin-bottom:1.25rem">
-          When enabled, all human-like delays are removed for instant action execution.
-          Use only if detection risk is acceptable.
+          Removes cosmetic waiting time (pre/post-action pauses, scroll reading pauses).
+          Functional delays — page loads, click settle time, typing rhythm — are kept
+          at a safe minimum so actions complete correctly and aren't flagged as invalid.
         </p>
         <label class="toggle-label" id="speed-mode-row">
           <span id="speed-mode-text">Loading…</span>
