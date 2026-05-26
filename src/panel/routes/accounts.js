@@ -46,6 +46,10 @@ router.post('/', (req, res) => {
     if (!username || !password || !platform) {
       return res.status(400).json({ error: 'username, password, platform required' });
     }
+    const exists = getDb().prepare(`SELECT id FROM accounts WHERE username = ? AND platform = ?`).get(username, platform);
+    if (exists) {
+      return res.status(409).json({ error: `@${username} on ${platform} already exists (id: ${exists.id})` });
+    }
     const id = am.addAccount({ username, password, email, phone, platform, proxyId, twoFaSecret, notes, skipWarmup: !!skipWarmup });
     res.status(201).json({ id });
   } catch (err) {
