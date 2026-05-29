@@ -28,7 +28,7 @@ function addAccount({ username, password, email, phone, platform, proxyId, twoFa
   const result = db.prepare(`
     INSERT INTO accounts (username, password, email, phone, platform, proxy_id, two_fa_secret, notes, status, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(username, password, email ?? null, phone ?? null, platform, proxyId ?? null, twoFaSecret ?? null, notes ?? null, initialStatus, now, now);
+  `).run(username, password ?? null, email ?? null, phone ?? null, platform, proxyId ?? null, twoFaSecret ?? null, notes ?? null, initialStatus, now, now);
 
   const accountId = result.lastInsertRowid;
 

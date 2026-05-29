@@ -4,7 +4,7 @@ const { Router } = require('express');
 const am = require('../../account-manager/index');
 const { logEvent, getAccountHealth, getAlerts } = require('../../account-manager/health-monitor');
 const { loginAndSaveSession } = require('../../playwright-engine/index');
-const { hasActiveSession } = require('../../account-manager/session-manager');
+const { hasActiveSession, saveSession } = require('../../account-manager/session-manager');
 const { getUsage } = require('../../account-manager/rate-limiter');
 const { runMigrations } = require('../../database/schema');
 const { getDb } = require('../../database/db');
@@ -42,8 +42,8 @@ router.get('/', (req, res) => {
 router.post('/', (req, res) => {
   try {
     const { username, password, email, phone, platform, proxyId, twoFaSecret, notes, skipWarmup } = req.body;
-    if (!username || !password || !platform) {
-      return res.status(400).json({ error: 'username, password, platform required' });
+    if (!username || !platform) {
+      return res.status(400).json({ error: 'username and platform required' });
     }
     const exists = getDb().prepare(`SELECT id FROM accounts WHERE username = ? AND platform = ?`).get(username, platform);
     if (exists) {
@@ -115,6 +115,65 @@ router.post('/:id/warmup/restart', (req, res) => {
     if (!acc) return res.status(404).json({ error: 'Account not found' });
     am.warmup.restartWarmup(acc.id, acc.platform);
     res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/accounts/:id/import-session — import cookies from browser extension
+router.post('/:id/import-session', (req, res) => {
+  try {
+    const acc = am.getAccount(Number(req.params.id));
+    if (!acc) return res.status(404).json({ error: 'Account not found' });
+
+    const { cookies_json, storage_state } = req.body;
+
+    let state;
+
+    if (storage_state && typeof storage_state === 'object' && Array.isArray(storage_state.cookies)) {
+      // Already Playwright storageState — pass through
+      state = storage_state;
+    } else {
+      // Cookie Editor / EditThisCookie export: JSON array of cookie objects
+      let raw;
+      try {
+        raw = typeof cookies_json === 'string' ? JSON.parse(cookies_json) : cookies_json;
+      } catch (_) {
+        return res.status(400).json({ error: 'Invalid JSON — paste the full cookie array from the extension' });
+      }
+      if (!Array.isArray(raw) || raw.length === 0) {
+        return res.status(400).json({ error: 'Expected a non-empty JSON array of cookies' });
+      }
+
+      const SAME_SITE = { no_restriction: 'None', lax: 'Lax', strict: 'Strict', unspecified: 'None' };
+      const ORIGINS = {
+        instagram: 'https://www.instagram.com',
+        facebook:  'https://www.facebook.com',
+        twitter:   'https://x.com',
+        tiktok:    'https://www.tiktok.com',
+        youtube:   'https://www.youtube.com',
+        threads:   'https://www.threads.net',
+      };
+
+      const cookies = raw.map(c => ({
+        name:     String(c.name),
+        value:    String(c.value),
+        domain:   String(c.domain),
+        path:     c.path || '/',
+        expires:  c.expirationDate != null ? Math.floor(Number(c.expirationDate)) : -1,
+        httpOnly: Boolean(c.httpOnly),
+        secure:   Boolean(c.secure),
+        sameSite: SAME_SITE[(c.sameSite ?? '').toLowerCase()] ?? 'None',
+      }));
+
+      state = {
+        cookies,
+        origins: [{ origin: ORIGINS[acc.platform] ?? '', localStorage: [] }],
+      };
+    }
+
+    saveSession(acc.id, acc.platform, state);
+    res.json({ ok: true, session_active: hasActiveSession(acc.id, acc.platform) });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

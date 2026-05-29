@@ -6,9 +6,15 @@ const AccountsPage = (() => {
   }
 
   function sessionBadge(active, accountId, username, platform) {
-    return active
-      ? `<span class="session-dot session-dot--on">● Connected</span>`
-      : `<button class="btn btn-ghost btn-sm session-connect-btn" onclick="AccountsPage.connect(${accountId}, '${username}', '${platform}', this)">Connect</button>`;
+    if (active) return `<span class="session-dot session-dot--on">● Connected</span>`;
+    return `
+      <div class="flex gap-1">
+        <button class="btn btn-ghost btn-sm session-connect-btn"
+          onclick="AccountsPage.connect(${accountId}, '${username}', '${platform}', this)">Connect</button>
+        <button class="btn btn-ghost btn-sm"
+          title="Import cookies from browser (for Google/Facebook OAuth accounts)"
+          onclick="AccountsPage.importSession(${accountId}, '${username}', '${platform}')">Import</button>
+      </div>`;
   }
 
   function warmupBar(warmup) {
@@ -97,7 +103,7 @@ const AccountsPage = (() => {
           <input type="text" id="acc-username" placeholder="@username">
         </div>
         <div class="form-group">
-          <label>Password</label>
+          <label>Password <span class="text-muted text-sm">(leave blank if using cookie import)</span></label>
           <input type="password" id="acc-password">
         </div>
       </div>
@@ -148,7 +154,8 @@ const AccountsPage = (() => {
       notes:        document.getElementById('acc-notes').value.trim() || undefined,
       skipWarmup:   document.getElementById('acc-skip-warmup').checked,
     };
-    if (!body.username || !body.password) return Toast.error('Username and password required');
+    if (!body.username) return Toast.error('Username required');
+    if (!body.password) body.password = null;
     try {
       await API.post('/api/accounts', body);
       Toast.success('Account added');
@@ -232,5 +239,54 @@ const AccountsPage = (() => {
     }
   }
 
-  return { render, reload, add, _submitAdd, remove, showHealth, showUsage, connect };
+  function importSession(id, username, platform) {
+    Modal.open(`Import Session — @${username} (${platform})`, `
+      <div class="form-group">
+        <p class="text-sm" style="line-height:1.6">
+          Use this when the account logs in via <strong>Google, Facebook, or Apple</strong>,
+          or when auto-connect fails. No password is needed.
+        </p>
+        <ol class="text-sm" style="line-height:1.8;padding-left:1.25rem;margin:.5rem 0">
+          <li>Install the <strong>Cookie Editor</strong> browser extension
+            (<a href="https://cookie-editor.com" target="_blank" rel="noopener" style="color:var(--accent)">cookie-editor.com</a>)</li>
+          <li>Open <strong>${_platformUrl(platform)}</strong> and log in normally in your browser</li>
+          <li>Click the Cookie Editor icon → <strong>Export → Export as JSON</strong></li>
+          <li>Paste the copied JSON below</li>
+        </ol>
+      </div>
+      <div class="form-group">
+        <label>Cookies JSON</label>
+        <textarea id="import-cookies-json" rows="8"
+          style="font-family:monospace;font-size:0.75rem;width:100%;resize:vertical"
+          placeholder='[{"name":"sessionid","value":"...","domain":".${platform}.com",...}]'></textarea>
+      </div>
+      <div class="flex gap-1" style="justify-content:flex-end">
+        <button class="btn btn-ghost" onclick="Modal.close()">Cancel</button>
+        <button class="btn btn-primary" onclick="AccountsPage._submitImport(${id}, '${username}', '${platform}')">Save Session</button>
+      </div>`, { wide: true });
+  }
+
+  function _platformUrl(platform) {
+    const urls = {
+      instagram: 'instagram.com', facebook: 'facebook.com',
+      twitter: 'x.com', tiktok: 'tiktok.com',
+      youtube: 'youtube.com', threads: 'threads.net',
+    };
+    return urls[platform] ?? platform;
+  }
+
+  async function _submitImport(id, username, platform) {
+    const raw = document.getElementById('import-cookies-json').value.trim();
+    if (!raw) return Toast.error('Paste the cookie JSON first');
+    try {
+      await API.post(`/api/accounts/${id}/import-session`, { cookies_json: raw });
+      Toast.success(`Session imported for @${username} (${platform})`);
+      Modal.close();
+      await reload();
+    } catch (err) {
+      Toast.error(err.message);
+    }
+  }
+
+  return { render, reload, add, _submitAdd, remove, showHealth, showUsage, connect, importSession, _submitImport };
 })();
