@@ -33,6 +33,10 @@ const SEL = {
 
   // FYP scroll container
   fyp_container:      '[data-e2e="recommend-list"], [class*="DivMainFeed"]',
+
+  // OAuth
+  google_oauth_btn:   '[data-e2e="channel-item-google"], a:has-text("Continue with Google"), div:has-text("Continue with Google"):not(p)',
+  facebook_oauth_btn: '[data-e2e="channel-item-facebook"], a:has-text("Continue with Facebook"), div:has-text("Continue with Facebook"):not(p)',
 };
 
 // ----------------------------------------------------------------
@@ -51,10 +55,145 @@ async function checkForDetection(page) {
 }
 
 // ----------------------------------------------------------------
+// 1a. _googleOAuthFlow — shared Google OAuth credential flow
+// ----------------------------------------------------------------
+
+async function _googleOAuthFlow(authPage, account) {
+  await authPage.waitForLoadState('domcontentloaded').catch(() => {});
+  await h.delay(h.randInt(1500, 2500));
+
+  // Handle "use another account" picker
+  const otherAcct = authPage.locator('li:has-text("Use another account"), div:has-text("Use another account")').first();
+  if (await otherAcct.count() > 0) { await otherAcct.click(); await h.waitForLoad(authPage); }
+
+  const emailInput = authPage.locator('input[type="email"]').first();
+  if (await emailInput.count() > 0) {
+    await h.humanType(authPage, 'input[type="email"]', account.email ?? account.username);
+    await h.delay(h.randInt(600, 1000));
+    await authPage.locator('#identifierNext button, button:has-text("Next")').first().click();
+    await h.waitForLoad(authPage, 15000);
+    await h.delay(h.randInt(1000, 2000));
+  }
+
+  const pwInput = authPage.locator('input[type="password"]:visible').first();
+  if (await pwInput.count() > 0) {
+    await h.humanType(authPage, 'input[type="password"]:visible', account.password);
+    await h.delay(h.randInt(600, 1000));
+    await authPage.locator('#passwordNext button, button:has-text("Next")').first().click();
+    await h.waitForLoad(authPage, 20000);
+  }
+
+  // TOTP if needed
+  const totpInput = authPage.locator('input[id*="totpPin"], input[name="totpPin"], input[aria-label*="code"]:visible').first();
+  if (await totpInput.count() > 0 && account.two_fa_secret) {
+    const { generateTOTP } = require('./instagram');
+    await h.humanType(authPage, 'input[id*="totpPin"], input[name="totpPin"]', generateTOTP(account.two_fa_secret));
+    await authPage.locator('button:has-text("Next"), button:has-text("Verify")').first().click();
+    await h.waitForLoad(authPage, 15000);
+  }
+}
+
+// ----------------------------------------------------------------
+// 1b. loginWithGoogle — Google OAuth for TikTok
+// ----------------------------------------------------------------
+
+async function loginWithGoogle(page, account) {
+  log.info('Logging in via Google OAuth', { username: account.email ?? account.username });
+
+  await page.goto(`${BASE_URL}/login`, { waitUntil: 'domcontentloaded', timeout: 30000 });
+  await h.waitForLoad(page);
+  await h.preAction();
+
+  const cookieBtn = page.locator('button:has-text("Accept all"), button:has-text("Allow all")').first();
+  if (await cookieBtn.count() > 0) { await cookieBtn.click(); await h.shortPause(); }
+
+  const googleBtn = page.locator(SEL.google_oauth_btn).first();
+  if (await googleBtn.count() === 0) return { success: false, event: 'login_required', message: 'Google login button not found on TikTok' };
+
+  const popupPromise = page.waitForEvent('popup', { timeout: 5000 }).catch(() => null);
+  await googleBtn.click();
+  const popup = await popupPromise;
+
+  await _googleOAuthFlow(popup ?? page, account);
+
+  if (popup) {
+    await popup.waitForEvent('close', { timeout: 30000 }).catch(() => {});
+    await page.waitForLoadState('domcontentloaded').catch(() => {});
+    await h.delay(h.randInt(2000, 3500));
+  }
+
+  const url = page.url();
+  if (url.includes('/login')) return { success: false, event: 'login_required' };
+
+  log.info('Google OAuth login successful for TikTok', { username: account.email ?? account.username });
+  return { success: true };
+}
+
+// ----------------------------------------------------------------
+// 1c. loginWithFacebook — Facebook OAuth for TikTok
+// ----------------------------------------------------------------
+
+async function loginWithFacebook(page, account) {
+  log.info('Logging in via Facebook OAuth for TikTok', { username: account.username });
+
+  await page.goto(`${BASE_URL}/login`, { waitUntil: 'domcontentloaded', timeout: 30000 });
+  await h.waitForLoad(page);
+  await h.preAction();
+
+  const cookieBtn = page.locator('button:has-text("Accept all"), button:has-text("Allow all")').first();
+  if (await cookieBtn.count() > 0) { await cookieBtn.click(); await h.shortPause(); }
+
+  const fbBtn = page.locator(SEL.facebook_oauth_btn).first();
+  if (await fbBtn.count() === 0) return { success: false, event: 'login_required', message: 'Facebook login button not found on TikTok' };
+
+  const popupPromise = page.waitForEvent('popup', { timeout: 5000 }).catch(() => null);
+  await fbBtn.click();
+  const popup = await popupPromise;
+
+  const authPage = popup ?? page;
+  await authPage.waitForLoadState('domcontentloaded').catch(() => {});
+  await h.delay(h.randInt(1500, 2500));
+
+  const emailField = await authPage.$('input[id="email"], input[name="email"]');
+  if (emailField) {
+    await h.humanType(authPage, 'input[id="email"], input[name="email"]', account.email ?? account.username);
+    await h.delay(h.randInt(500, 900));
+    await h.humanType(authPage, 'input[id="pass"], input[name="pass"]', account.password);
+    await h.delay(h.randInt(600, 1000));
+    const loginBtn = authPage.locator('button[name="login"]').first();
+    if (await loginBtn.count() > 0) await loginBtn.click();
+    else await authPage.keyboard.press('Enter');
+    await h.waitForLoad(authPage, 20000);
+  }
+
+  const continueBtn = authPage.locator('button:has-text("Continue"), button:has-text("OK")').first();
+  if (await continueBtn.count() > 0) {
+    await h.delay(h.randInt(800, 1500));
+    await continueBtn.click();
+    await h.waitForLoad(authPage, 15000);
+  }
+
+  if (popup) {
+    await popup.waitForEvent('close', { timeout: 30000 }).catch(() => {});
+    await page.waitForLoadState('domcontentloaded').catch(() => {});
+    await h.delay(h.randInt(1000, 2000));
+  }
+
+  const url = page.url();
+  if (url.includes('/login')) return { success: false, event: 'login_required' };
+
+  log.info('Facebook OAuth login successful for TikTok', { username: account.username });
+  return { success: true };
+}
+
+// ----------------------------------------------------------------
 // 1. login
 // ----------------------------------------------------------------
 
 async function login(page, account) {
+  if (account.login_method === 'google')   return loginWithGoogle(page, account);
+  if (account.login_method === 'facebook') return loginWithFacebook(page, account);
+  // default: email/password
   log.info('Logging in', { username: account.username });
 
   await page.goto(`${BASE_URL}/login/phone-or-email/email`, { waitUntil: 'domcontentloaded', timeout: 30000 });
@@ -269,6 +408,8 @@ async function scrollFYP(page, { seconds = null } = {}) {
 
 module.exports = {
   login,
+  loginWithGoogle,
+  loginWithFacebook,
   watchVideo,
   likeVideo,
   followUser,

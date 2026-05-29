@@ -53,6 +53,9 @@ const SEL = {
   // Reel / video
   reel_mute_button:   'button[aria-label="Audio is muted"], button[aria-label="Mute"]',
 
+  // OAuth
+  facebook_oauth_btn: 'a:has-text("Log in with Facebook"), [data-testid="royal_login_button"], a[href*="facebook.com/dialog"]',
+
   // DM
   dm_new_msg_btn:     'a[href="/direct/new/"], svg[aria-label="New message"]',
   dm_search_input:    'input[name="queryBox"], input[placeholder*="Search"]',
@@ -125,10 +128,77 @@ async function checkForDetection(page) {
 }
 
 // ----------------------------------------------------------------
+// 1a. loginWithFacebook — OAuth via Facebook
+// ----------------------------------------------------------------
+
+async function loginWithFacebook(page, account) {
+  log.info('Logging in via Facebook OAuth', { username: account.username });
+
+  await page.goto(`${BASE_URL}/accounts/login/`, { waitUntil: 'domcontentloaded', timeout: 30000 });
+  await h.waitForLoad(page);
+  await h.preAction();
+
+  const acceptCookies = page.locator('button:has-text("Allow all cookies"), button:has-text("Accept all")').first();
+  if (await acceptCookies.count() > 0) { await acceptCookies.click(); await h.shortPause(); }
+
+  const fbBtn = page.locator(SEL.facebook_oauth_btn).first();
+  if (await fbBtn.count() === 0) return { success: false, event: 'login_required', message: 'Facebook login button not found' };
+
+  // Facebook OAuth can open as popup or same-tab redirect — handle both
+  const popupPromise = page.waitForEvent('popup', { timeout: 4000 }).catch(() => null);
+  await fbBtn.click();
+  const popup = await popupPromise;
+
+  const authPage = popup ?? page;
+  await authPage.waitForLoadState('domcontentloaded').catch(() => {});
+  await h.delay(h.randInt(1500, 2500));
+
+  // Fill Facebook credentials
+  const emailField = await authPage.$('input[id="email"], input[name="email"]');
+  if (emailField) {
+    await h.humanType(authPage, 'input[id="email"], input[name="email"]', account.email ?? account.username);
+    await h.delay(h.randInt(500, 900));
+    await h.humanType(authPage, 'input[id="pass"], input[name="pass"], input[type="password"]', account.password);
+    await h.delay(h.randInt(600, 1000));
+    const loginBtn = authPage.locator('button[name="login"], [data-testid="royal_login_button"]').first();
+    if (await loginBtn.count() > 0) await loginBtn.click();
+    else await authPage.keyboard.press('Enter');
+    await h.waitForLoad(authPage, 20000);
+  }
+
+  // "Continue as" confirmation
+  const continueBtn = authPage.locator('button:has-text("Continue"), button:has-text("OK"), button:has-text("Okay")').first();
+  if (await continueBtn.count() > 0) {
+    await h.delay(h.randInt(800, 1500));
+    await continueBtn.click();
+    await h.waitForLoad(authPage, 15000);
+  }
+
+  if (popup) {
+    await popup.waitForEvent('close', { timeout: 30000 }).catch(() => {});
+    await page.waitForLoadState('domcontentloaded').catch(() => {});
+    await h.delay(h.randInt(1000, 2000));
+  }
+
+  const detection = await checkForDetection(page);
+  if (detection) return { success: false, event: detection };
+
+  const url = page.url();
+  if (url.includes('/accounts/login') || url.includes('/challenge')) {
+    return { success: false, event: 'login_required' };
+  }
+
+  log.info('Facebook OAuth login successful', { username: account.username });
+  return { success: true };
+}
+
+// ----------------------------------------------------------------
 // 1. login
 // ----------------------------------------------------------------
 
 async function login(page, account) {
+  if (account.login_method === 'facebook') return loginWithFacebook(page, account);
+  // default: username/password
   log.info('Logging in', { username: account.username });
 
   await page.goto(`${BASE_URL}/accounts/login/`, { waitUntil: 'domcontentloaded', timeout: 30000 });
@@ -636,6 +706,7 @@ async function postStory(page, { mediaPath } = {}) {
 
 module.exports = {
   login,
+  loginWithFacebook,
   scrollFeed,
   watchStory,
   likePost,

@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS accounts (
   proxy_id         INTEGER REFERENCES proxies(id) ON DELETE SET NULL,
   two_fa_secret    TEXT,
   warmup_day       INTEGER NOT NULL DEFAULT 0,
+  login_method     TEXT    NOT NULL DEFAULT 'password',
   notes            TEXT,
   created_at       DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at       DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -184,6 +185,11 @@ CREATE INDEX IF NOT EXISTS idx_campaign_logs_campaign   ON campaign_logs(campaig
 
 function runMigrations(db) {
   db.exec(SCHEMA);
+  // Additive migrations — swallowed if column already exists
+  const addCol = (tbl, col, def) => {
+    try { db.exec(`ALTER TABLE ${tbl} ADD COLUMN ${col} ${def}`); } catch (_) {}
+  };
+  addCol('accounts', 'login_method', `TEXT NOT NULL DEFAULT 'password'`);
 }
 
 module.exports = { runMigrations };

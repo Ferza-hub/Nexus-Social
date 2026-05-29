@@ -16,7 +16,7 @@ const log = makeLogger('AccountManager');
 // Account CRUD
 // ----------------------------------------------------------------
 
-function addAccount({ username, password, email, phone, platform, proxyId, twoFaSecret, notes, skipWarmup = false }) {
+function addAccount({ username, password, email, phone, platform, proxyId, twoFaSecret, notes, skipWarmup = false, loginMethod = 'password' }) {
   const db = getDb();
   const now = new Date().toISOString();
 
@@ -26,9 +26,9 @@ function addAccount({ username, password, email, phone, platform, proxyId, twoFa
   const initialStatus = skipWarmup ? 'active' : 'new';
 
   const result = db.prepare(`
-    INSERT INTO accounts (username, password, email, phone, platform, proxy_id, two_fa_secret, notes, status, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(username, password ?? null, email ?? null, phone ?? null, platform, proxyId ?? null, twoFaSecret ?? null, notes ?? null, initialStatus, now, now);
+    INSERT INTO accounts (username, password, email, phone, platform, proxy_id, two_fa_secret, notes, status, login_method, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(username, password ?? null, email ?? null, phone ?? null, platform, proxyId ?? null, twoFaSecret ?? null, notes ?? null, initialStatus, loginMethod, now, now);
 
   const accountId = result.lastInsertRowid;
 

@@ -179,6 +179,89 @@ router.post('/:id/import-session', (req, res) => {
   }
 });
 
+// POST /api/accounts/setup — unified create-or-update + connect
+router.post('/setup', async (req, res) => {
+  try {
+    const {
+      id, platform, login_method = 'password',
+      username, email, password,
+      phone, twoFaSecret, notes, skipWarmup,
+    } = req.body;
+
+    const db = getDb();
+    let accountId = id ? Number(id) : null;
+
+    if (accountId) {
+      // Reconnecting existing account — update credentials if supplied
+      const acc = am.getAccount(accountId);
+      if (!acc) return res.status(404).json({ error: 'Account not found' });
+
+      const cols = ['login_method=?', 'updated_at=?'];
+      const vals = [login_method, new Date().toISOString()];
+      if (password)            { cols.push('password=?');       vals.push(password); }
+      if (email)               { cols.push('email=?');          vals.push(email); }
+      if (phone)               { cols.push('phone=?');          vals.push(phone); }
+      if (twoFaSecret != null) { cols.push('two_fa_secret=?'); vals.push(twoFaSecret || null); }
+      vals.push(accountId);
+      db.prepare(`UPDATE accounts SET ${cols.join(',')} WHERE id=?`).run(...vals);
+
+    } else {
+      // New account
+      if (!platform) return res.status(400).json({ error: 'platform required' });
+      const uname = (username || '').trim().replace('@', '') || (email || '').split('@')[0];
+      if (!uname) return res.status(400).json({ error: 'username or email required' });
+
+      const existing = db.prepare('SELECT id FROM accounts WHERE username=? AND platform=?').get(uname, platform);
+      if (existing) {
+        accountId = existing.id;
+        // Update credentials for re-connect
+        const cols = ['login_method=?', 'updated_at=?'];
+        const vals = [login_method, new Date().toISOString()];
+        if (password)            { cols.push('password=?');       vals.push(password); }
+        if (email)               { cols.push('email=?');          vals.push(email); }
+        if (phone)               { cols.push('phone=?');          vals.push(phone); }
+        if (twoFaSecret != null) { cols.push('two_fa_secret=?'); vals.push(twoFaSecret || null); }
+        vals.push(accountId);
+        db.prepare(`UPDATE accounts SET ${cols.join(',')} WHERE id=?`).run(...vals);
+      } else {
+        accountId = am.addAccount({
+          username: uname,
+          password: password || '',
+          email:    email    || null,
+          phone:    phone    || null,
+          platform,
+          twoFaSecret:  twoFaSecret  || null,
+          notes:        notes        || null,
+          skipWarmup:   !!skipWarmup,
+          loginMethod:  login_method,
+        });
+      }
+    }
+
+    // Run Playwright login
+    const acc = am.getAccount(accountId);
+    const result = await loginAndSaveSession(accountId, acc.platform);
+
+    if (!result.success) {
+      return res.status(400).json({
+        id: accountId,
+        ok: false,
+        error: result.event ?? result.reason ?? 'login_failed',
+      });
+    }
+
+    res.json({
+      id: accountId,
+      ok: true,
+      session_active: hasActiveSession(accountId, acc.platform),
+      username: acc.username,
+      platform: acc.platform,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/accounts/alerts
 router.get('/alerts/all', (req, res) => {
   try {
