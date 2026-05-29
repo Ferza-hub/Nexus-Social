@@ -5,7 +5,6 @@ const am = require('../../account-manager/index');
 const { logEvent, getAccountHealth, getAlerts } = require('../../account-manager/health-monitor');
 const { loginAndSaveSession } = require('../../playwright-engine/index');
 const { hasActiveSession } = require('../../account-manager/session-manager');
-const { hasActiveSession } = require('../../account-manager/session-manager');
 const { getUsage } = require('../../account-manager/rate-limiter');
 const { runMigrations } = require('../../database/schema');
 const { getDb } = require('../../database/db');
