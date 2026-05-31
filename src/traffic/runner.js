@@ -106,12 +106,14 @@ async function runJob(jobId) {
     const targetValue = extractTarget(job.platform, job.action_type, job.target_value);
     let completed = 0;
 
+    const scope = job.account_scope ?? 'traffic';
+
     // ----------------------------------------------------------------
     // Anonymous path — views with no account required
-    // Runs MAX_CONCURRENT_BROWSERS workers simultaneously so N browsers
-    // are always active at once instead of waiting one-by-one.
+    // Only used for instant-mode (scope='traffic'). Managed-mode views
+    // fall through to the account-based path so rate limits apply.
     // ----------------------------------------------------------------
-    if (actionDef.canAnon) {
+    if (actionDef.canAnon && scope !== 'managed') {
       const CONCURRENT = Math.min(
         parseInt(process.env.MAX_CONCURRENT_BROWSERS ?? '4', 10),
         job.target_count
@@ -177,10 +179,11 @@ async function runJob(jobId) {
     }
 
     // ----------------------------------------------------------------
-    // Account-based path — likes / followers
+    // Account-based path — likes / followers (and managed-mode views)
     // ----------------------------------------------------------------
+    const roleFilter = scope === 'managed' ? "account_role='managed'" : "account_role='traffic'";
     const accounts = shuffle(
-      db.prepare("SELECT * FROM accounts WHERE platform=? AND status='active' AND account_role='traffic'").all(job.platform)
+      db.prepare(`SELECT * FROM accounts WHERE platform=? AND status='active' AND ${roleFilter}`).all(job.platform)
     );
 
     if (accounts.length === 0) {

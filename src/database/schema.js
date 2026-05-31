@@ -222,8 +222,9 @@ function runMigrations(db) {
     try { db.prepare(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`).run(); } catch (_) {}
   };
 
-  addCol('accounts', 'login_method', `TEXT NOT NULL DEFAULT 'password'`);
-  addCol('accounts', 'account_role', `TEXT NOT NULL DEFAULT 'managed'`);
+  addCol('accounts', 'login_method',  `TEXT NOT NULL DEFAULT 'password'`);
+  addCol('accounts', 'account_role',  `TEXT NOT NULL DEFAULT 'managed'`);
+  addCol('traffic_jobs', 'account_scope', `TEXT NOT NULL DEFAULT 'traffic'`);
 }
 
 module.exports = { runMigrations };

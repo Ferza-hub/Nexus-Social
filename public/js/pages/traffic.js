@@ -21,10 +21,11 @@ const TrafficPage = (() => {
     followers: { label: 'Followers', icon: '➕', hint: 'Paste the profile URL or just the @username' },
   };
 
-  let _pollTimer  = null;
-  let _activeId   = null;
-  let _platform   = 'instagram';
-  let _actionType = 'views';
+  let _pollTimer   = null;
+  let _activeId    = null;
+  let _platform    = 'instagram';
+  let _actionType  = 'views';
+  let _scope       = 'instant'; // 'instant' = traffic accounts + anon views | 'managed' = warmed accounts
 
   // ----------------------------------------------------------------
   // Page render
@@ -40,6 +41,25 @@ const TrafficPage = (() => {
         <!-- Left: new job form -->
         <div class="card" style="padding:1.25rem">
           <h3 style="margin:0 0 1rem;font-size:1rem">New Job</h3>
+
+          <div class="form-group">
+            <label>Mode</label>
+            <div id="tr-scope-grid" style="display:flex;gap:.35rem;margin-top:.4rem">
+              <button type="button" id="tr-scope-instant"
+                class="btn btn-primary btn-sm" style="flex:1"
+                onclick="TrafficPage._setScope('instant', this)">
+                ⚡ Instant
+              </button>
+              <button type="button" id="tr-scope-managed"
+                class="btn btn-ghost btn-sm" style="flex:1"
+                onclick="TrafficPage._setScope('managed', this)">
+                👤 Managed Accounts
+              </button>
+            </div>
+            <div class="text-muted text-sm" id="tr-scope-hint" style="margin-top:.3rem">
+              Views anonymous · Likes &amp; Follows via traffic accounts
+            </div>
+          </div>
 
           <div class="form-group">
             <label>Platform</label>
@@ -133,6 +153,24 @@ const TrafficPage = (() => {
   }
 
   // ----------------------------------------------------------------
+  // Scope (mode) selection
+  // ----------------------------------------------------------------
+
+  const SCOPE_HINTS = {
+    instant: 'Views anonymous · Likes &amp; Follows via traffic accounts',
+    managed: 'All active warmed accounts · Rate-limited (follow: 20/hr · like: 50/hr)',
+  };
+
+  function _setScope(scope, btn) {
+    _scope = scope;
+    document.querySelectorAll('#tr-scope-grid button').forEach(b => b.className = 'btn btn-ghost btn-sm');
+    btn.classList.replace('btn-ghost', 'btn-primary');
+    const hint = document.getElementById('tr-scope-hint');
+    if (hint) hint.innerHTML = SCOPE_HINTS[scope] ?? '';
+    _refreshAvailability(_platform);
+  }
+
+  // ----------------------------------------------------------------
   // Platform / action selection
   // ----------------------------------------------------------------
 
@@ -197,7 +235,8 @@ const TrafficPage = (() => {
   async function _refreshAvailability(platform) {
     const el = document.getElementById('tr-avail');
 
-    if (ANON_ACTIONS.has(_actionType)) {
+    // Instant mode + views = anonymous, no accounts needed
+    if (ANON_ACTIONS.has(_actionType) && _scope === 'instant') {
       if (el) {
         el.textContent = 'Anonymous traffic';
         el.style.color = 'var(--text-success, #22c55e)';
@@ -208,11 +247,13 @@ const TrafficPage = (() => {
     }
 
     try {
-      const data = await API.get(`/api/traffic/accounts?platform=${platform}`);
+      const apiScope = _scope === 'managed' ? 'managed' : 'traffic';
+      const data = await API.get(`/api/traffic/accounts?platform=${platform}&scope=${apiScope}`);
       if (el) {
+        const label = _scope === 'managed' ? 'managed account' : 'traffic account';
         el.textContent = data.count > 0
-          ? `${data.count} account${data.count !== 1 ? 's' : ''} ready`
-          : 'None — connect accounts first';
+          ? `${data.count} ${label}${data.count !== 1 ? 's' : ''} ready`
+          : _scope === 'managed' ? 'No active managed accounts' : 'None — add traffic accounts first';
         el.style.color = data.count > 0 ? 'var(--text-success, #22c55e)' : 'var(--text-muted)';
       }
       _updateCapacityWarn(data.count);
@@ -258,10 +299,11 @@ const TrafficPage = (() => {
 
     try {
       const result = await API.post('/api/traffic', {
-        platform:     _platform,
-        action_type:  _actionType,
-        target_value: target,
+        platform:      _platform,
+        action_type:   _actionType,
+        target_value:  target,
         count,
+        account_scope: _scope === 'managed' ? 'managed' : 'traffic',
       });
 
       Toast.success(result.anonymous
@@ -537,5 +579,5 @@ const TrafficPage = (() => {
     return `${Math.floor(h / 24)}d ago`;
   }
 
-  return { render, destroy, _setPlatform, _setAction, _start, _stop, _delete, _watchJob, _addTrafficAccounts, _submitBulkTraffic };
+  return { render, destroy, _setScope, _setPlatform, _setAction, _start, _stop, _delete, _watchJob, _addTrafficAccounts, _submitBulkTraffic };
 })();

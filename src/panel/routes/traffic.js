@@ -18,15 +18,16 @@ router.get('/', (req, res) => {
   }
 });
 
-// GET /api/traffic/accounts?platform=instagram
+// GET /api/traffic/accounts?platform=instagram&scope=traffic|managed
 router.get('/accounts', (req, res) => {
   try {
-    const { platform } = req.query;
+    const { platform, scope = 'traffic' } = req.query;
     if (!platform) return res.status(400).json({ error: 'platform required' });
+    const roleFilter = scope === 'managed' ? "account_role='managed'" : "account_role='traffic'";
     const row = getDb().prepare(
-      "SELECT COUNT(*) AS n FROM accounts WHERE platform=? AND status='active' AND account_role='traffic'"
+      `SELECT COUNT(*) AS n FROM accounts WHERE platform=? AND status='active' AND ${roleFilter}`
     ).get(platform);
-    res.json({ platform, count: row?.n ?? 0 });
+    res.json({ platform, scope, count: row?.n ?? 0 });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -35,7 +36,7 @@ router.get('/accounts', (req, res) => {
 // POST /api/traffic — create and start a traffic job
 router.post('/', async (req, res) => {
   try {
-    const { platform, action_type, target_value, count = 10 } = req.body;
+    const { platform, action_type, target_value, count = 10, account_scope = 'traffic' } = req.body;
 
     if (!platform || !action_type || !target_value) {
       return res.status(400).json({ error: 'platform, action_type, target_value required' });
@@ -46,38 +47,42 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ error: `"${action_type}" is not supported for ${platform}` });
     }
 
-    const db = getDb();
-    const n  = Number(count);
+    const db     = getDb();
+    const n      = Number(count);
+    const scope  = account_scope === 'managed' ? 'managed' : 'traffic';
     if (!n || n < 1) return res.status(400).json({ error: 'count must be ≥ 1' });
 
-    // Account check only needed for non-anonymous actions
+    // For managed scope OR non-anonymous actions: verify accounts exist
+    const isAnon = actionDef.canAnon && scope !== 'managed';
     let avail = 0;
-    if (!actionDef.canAnon) {
+    if (!isAnon) {
+      const roleFilter = scope === 'managed' ? "account_role='managed'" : "account_role='traffic'";
       avail = db.prepare(
-        "SELECT COUNT(*) AS n FROM accounts WHERE platform=? AND status='active' AND account_role='traffic'"
+        `SELECT COUNT(*) AS n FROM accounts WHERE platform=? AND status='active' AND ${roleFilter}`
       ).get(platform)?.n ?? 0;
 
       if (avail === 0) {
         return res.status(400).json({
-          error: `No active ${platform} accounts. Connect accounts first.`,
+          error: scope === 'managed'
+            ? `No active managed ${platform} accounts.`
+            : `No active ${platform} traffic accounts. Add accounts first.`,
         });
       }
     }
 
     const result = db.prepare(`
-      INSERT INTO traffic_jobs (platform, action_type, target_value, target_count, status, created_at, updated_at)
-      VALUES (?, ?, ?, ?, 'pending', ?, ?)
-    `).run(platform, action_type, target_value.trim(), n,
+      INSERT INTO traffic_jobs (platform, action_type, target_value, target_count, account_scope, status, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)
+    `).run(platform, action_type, target_value.trim(), n, scope,
            new Date().toISOString(), new Date().toISOString());
 
     const jobId = result.lastInsertRowid;
 
-    // Fire and forget — runJob updates the DB on its own
     runJob(Number(jobId)).catch(err => {
       console.error('[TrafficRunner] unhandled:', err.message);
     });
 
-    res.json({ id: jobId, accounts_available: avail, anonymous: actionDef.canAnon });
+    res.json({ id: jobId, accounts_available: avail, anonymous: isAnon, scope });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
