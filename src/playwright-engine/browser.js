@@ -199,17 +199,28 @@ function buildFingerprintScript(seed, viewport, ua, gpuPair, opts = {}) {
     return data;
   };
 
-  // 5. WebGL GPU
+  // 5. WebGL GPU — spoof both basic (VENDOR/RENDERER) and unmasked extension params
   const _gpuVendor   = '${gpuPair[0]}';
   const _gpuRenderer = '${gpuPair[1]}';
   const _patchWebGL  = (ctx) => {
     if (!ctx) return;
     const _orig = ctx.getParameter.bind(ctx);
     ctx.getParameter = function(p) {
-      if (p === 37445) return _gpuVendor;
-      if (p === 37446) return _gpuRenderer;
+      if (p === 0x1F00 || p === 7424) return 'WebKit';      // VENDOR (basic)
+      if (p === 0x1F01 || p === 7425) return _gpuRenderer;  // RENDERER (basic) — hides SwiftShader/llvmpipe
+      if (p === 37445)                return _gpuVendor;     // UNMASKED_VENDOR_WEBGL
+      if (p === 37446)                return _gpuRenderer;   // UNMASKED_RENDERER_WEBGL
       return _orig(p);
     };
+    // Spoof getSupportedExtensions to include real-GPU extensions
+    const _origExts = ctx.getSupportedExtensions?.bind(ctx);
+    if (_origExts) {
+      ctx.getSupportedExtensions = function() {
+        const exts = _origExts() || [];
+        if (!exts.includes('WEBGL_debug_renderer_info')) exts.push('WEBGL_debug_renderer_info');
+        return exts;
+      };
+    }
   };
   const _origGetCtx = HTMLCanvasElement.prototype.getContext;
   HTMLCanvasElement.prototype.getContext = function(type) {
@@ -228,25 +239,41 @@ function buildFingerprintScript(seed, viewport, ua, gpuPair, opts = {}) {
     };
   } catch(_) {}
 
-  // 7. Battery
+  // 7. Battery — level drifts naturally based on time-of-day + ghost base level
   try {
+    const _battBase   = ${opts.batteryBase ?? 0.65};
+    const _hourOfDay  = new Date().getHours();
+    // Morning (6-9h): charging. Evening (18-23h): discharging. Other: mixed.
+    const _isCharging = _hourOfDay >= 6 && _hourOfDay <= 9 ? true
+                      : _hourOfDay >= 18 ? false
+                      : _rand() > 0.45;
+    const _battLevel  = Math.min(1.0, Math.max(0.08,
+      _battBase + (_isCharging ? _rand() * 0.15 : -_rand() * 0.1)
+    ));
     Object.defineProperty(navigator, 'getBattery', {
       value: () => Promise.resolve({
-        charging: _rand() > 0.25, chargingTime: 0,
-        dischargingTime: Math.floor(4000 + _rand() * 14400),
-        level: 0.3 + _rand() * 0.7,
+        charging:        _isCharging,
+        chargingTime:    _isCharging ? Math.floor(1200 + _rand() * 3600) : Infinity,
+        dischargingTime: _isCharging ? Infinity : Math.floor(3600 + _rand() * 14400),
+        level:           Math.round(_battLevel * 100) / 100,
         addEventListener: () => {}, removeEventListener: () => {},
+        dispatchEvent: () => {},
       }),
       writable: false, configurable: false,
     });
   } catch(_) {}
 
-  // 8. Network info
+  // 8. Network info — consistent type per ghost
   try {
+    const _connType = '${opts.connectionType ?? 'wifi'}';
+    const _isWifi   = _connType === 'wifi';
     Object.defineProperty(navigator, 'connection', { get: () => ({
-      downlink: 10 + _rand() * 90, effectiveType: '4g',
-      rtt: Math.floor(10 + _rand() * 40), saveData: false, type: 'wifi',
-      addEventListener: () => {},
+      downlink:      _isWifi ? 50 + _rand() * 150 : 5 + _rand() * 20,
+      effectiveType: _isWifi ? '4g' : '4g',
+      rtt:           Math.floor(_isWifi ? 5 + _rand() * 25 : 40 + _rand() * 80),
+      saveData:      false,
+      type:          _connType,
+      addEventListener: () => {}, removeEventListener: () => {},
     })});
   } catch(_) {}
 
@@ -303,6 +330,36 @@ function buildFingerprintScript(seed, viewport, ua, gpuPair, opts = {}) {
         { deviceId: '', groupId: 'grp1', kind: 'audiooutput', label: '' },
         { deviceId: '', groupId: 'grp2', kind: 'videoinput',  label: '' },
       ]);
+    }
+  } catch(_) {}
+
+  // 14. Font spoofing — claim common system fonts are installed
+  // Headless has a minimal font set; this prevents canvas measureText detection
+  try {
+    const _COMMON_FONTS = [
+      'Arial','Arial Black','Arial Narrow','Calibri','Cambria','Comic Sans MS',
+      'Courier New','Georgia','Helvetica','Impact','Lucida Console','Lucida Sans',
+      'Microsoft Sans Serif','Palatino Linotype','Segoe UI','Tahoma','Times New Roman',
+      'Trebuchet MS','Verdana','Wingdings',
+    ];
+    if (typeof CSSFontFaceSet !== 'undefined') {
+      const _origCheck = CSSFontFaceSet.prototype.check;
+      CSSFontFaceSet.prototype.check = function(font, text) {
+        const name = font.replace(/^[\d.]+px\s+/, '').replace(/['"]/g, '').trim();
+        if (_COMMON_FONTS.some(f => name.toLowerCase().includes(f.toLowerCase()))) return true;
+        return _origCheck ? _origCheck.call(this, font, text) : false;
+      };
+    }
+  } catch(_) {}
+
+  // 15. History length — inject plausible prior navigation count
+  // (natural navigation in executeGhostView builds it further)
+  try {
+    if (history.length <= 1) {
+      const _fakeStops = Math.floor(2 + _rand() * 4); // 2–5 prior pages
+      for (let _i = 0; _i < _fakeStops; _i++) {
+        history.pushState({}, '', window.location.href);
+      }
     }
   } catch(_) {}
 
@@ -432,6 +489,14 @@ function _getResidentialProxies() {
   return _residentialProxies;
 }
 
+// Pick proxy that matches ghost's region (timezone geo) when possible
+function _pickProxyForRegion(region) {
+  const all = _getResidentialProxies();
+  if (!all.length) return null;
+  const matching = all.filter(p => p.geo_region === region);
+  return matching.length > 0 ? pick(matching) : pick(all);
+}
+
 async function launchAnonymous() {
   if (isConcurrencyFull()) {
     throw new Error(`Concurrent browser limit reached (${MAX_CONCURRENT}). Try again later.`);
@@ -508,9 +573,8 @@ async function launchWithGhost(ghostId) {
 
   const fp = JSON.parse(ghost.fingerprint_json);
 
-  // Pick random available residential proxy
-  const proxies = _getResidentialProxies();
-  const proxy   = proxies.length > 0 ? pick(proxies) : null;
+  // Pick proxy that matches ghost's geo region (timezone)
+  const proxy = _pickProxyForRegion(fp.region ?? null);
 
   const slotId = `ghost_${ghostId}`;
 
@@ -554,6 +618,8 @@ async function launchWithGhost(ghostId) {
     locale:              fp.locale,
     hardwareConcurrency: fp.hardwareConcurrency,
     deviceMemory:        fp.deviceMemory,
+    connectionType:      fp.connectionType ?? 'wifi',
+    batteryBase:         fp.batteryBase    ?? 0.65,
   }));
   const page = await context.newPage();
 

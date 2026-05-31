@@ -225,7 +225,8 @@ function runMigrations(db) {
   addCol('accounts', 'login_method',  `TEXT NOT NULL DEFAULT 'password'`);
   addCol('accounts', 'account_role',  `TEXT NOT NULL DEFAULT 'managed'`);
   addCol('traffic_jobs', 'account_scope', `TEXT NOT NULL DEFAULT 'traffic'`);
-  addCol('proxies', 'proxy_type', `TEXT NOT NULL DEFAULT 'dedicated'`);
+  addCol('proxies', 'proxy_type',   `TEXT NOT NULL DEFAULT 'dedicated'`);
+  addCol('proxies', 'geo_region',   `TEXT`);
 
   // Ghost profiles tables
   db.exec(`

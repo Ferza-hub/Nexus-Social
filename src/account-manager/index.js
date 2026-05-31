@@ -54,15 +54,16 @@ function listAccounts(platform = null, status = null) {
 // Proxy management
 // ----------------------------------------------------------------
 
-function addProxy({ host, port, username, password, protocol = 'http', proxyType = 'dedicated' }) {
-  const db = getDb();
+function addProxy({ host, port, username, password, protocol = 'http', proxyType = 'dedicated', geoRegion }) {
+  const db   = getDb();
   const type = proxyType === 'residential' ? 'residential' : 'dedicated';
+  const geo  = geoRegion ?? null;
   const result = db.prepare(`
-    INSERT INTO proxies (host, port, username, password, protocol, proxy_type)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).run(host, port, username ?? null, password ?? null, protocol, type);
+    INSERT INTO proxies (host, port, username, password, protocol, proxy_type, geo_region)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(host, port, username ?? null, password ?? null, protocol, type, geo);
 
-  log.info('Proxy added', { id: result.lastInsertRowid, host, port, type });
+  log.info('Proxy added', { id: result.lastInsertRowid, host, port, type, geo });
   return result.lastInsertRowid;
 }
 

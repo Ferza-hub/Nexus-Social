@@ -28,17 +28,20 @@ const _VIEWPORTS = [
   { width: 1280, height: 800 },
 ];
 
+// [timezone, locale, acceptLanguage, region]
 const _TIMEZONES = [
-  ['America/New_York',    'en-US', 'en-US,en;q=0.9'],
-  ['America/Chicago',     'en-US', 'en-US,en;q=0.9'],
-  ['America/Los_Angeles', 'en-US', 'en-US,en;q=0.9'],
-  ['America/Toronto',     'en-CA', 'en-CA,en;q=0.9,fr;q=0.8'],
-  ['Europe/London',       'en-GB', 'en-GB,en;q=0.9'],
-  ['Europe/Berlin',       'de-DE', 'de-DE,de;q=0.9,en;q=0.8'],
-  ['Europe/Paris',        'fr-FR', 'fr-FR,fr;q=0.9,en;q=0.8'],
-  ['Asia/Singapore',      'en-SG', 'en-SG,en;q=0.9'],
-  ['Australia/Sydney',    'en-AU', 'en-AU,en;q=0.9'],
-  ['America/Sao_Paulo',   'pt-BR', 'pt-BR,pt;q=0.9,en;q=0.8'],
+  ['America/New_York',    'en-US', 'en-US,en;q=0.9',          'us'],
+  ['America/Chicago',     'en-US', 'en-US,en;q=0.9',          'us'],
+  ['America/Los_Angeles', 'en-US', 'en-US,en;q=0.9',          'us'],
+  ['America/Toronto',     'en-CA', 'en-CA,en;q=0.9,fr;q=0.8', 'us'],
+  ['Europe/London',       'en-GB', 'en-GB,en;q=0.9',          'eu'],
+  ['Europe/Berlin',       'de-DE', 'de-DE,de;q=0.9,en;q=0.8', 'eu'],
+  ['Europe/Paris',        'fr-FR', 'fr-FR,fr;q=0.9,en;q=0.8', 'eu'],
+  ['Asia/Singapore',      'en-SG', 'en-SG,en;q=0.9',          'as'],
+  ['Australia/Sydney',    'en-AU', 'en-AU,en;q=0.9',          'au'],
+  ['America/Sao_Paulo',   'pt-BR', 'pt-BR,pt;q=0.9,en;q=0.8', 'br'],
+  ['Asia/Jakarta',        'id-ID', 'id-ID,id;q=0.9,en;q=0.8', 'as'],
+  ['Asia/Kuala_Lumpur',   'ms-MY', 'ms-MY,ms;q=0.9,en;q=0.8', 'as'],
 ];
 
 const _GPUS = [
@@ -59,7 +62,7 @@ function _pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
 function _randInt(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
 
 function generateFingerprint() {
-  const [timezone, locale, acceptLanguage] = _pick(_TIMEZONES);
+  const [timezone, locale, acceptLanguage, region] = _pick(_TIMEZONES);
   const hw      = _pick(_HW);
   const gpuPair = _pick(_GPUS);
   return {
@@ -68,11 +71,14 @@ function generateFingerprint() {
     timezone,
     locale,
     acceptLanguage,
+    region,                                          // for proxy geo matching
     gpuVendor:           gpuPair[0],
     gpuRenderer:         gpuPair[1],
     canvasSeed:          _randInt(100_000, 999_999_999),
     hardwareConcurrency: hw.concurrency,
     deviceMemory:        hw.memory,
+    connectionType:      _pick(['wifi', 'wifi', 'wifi', '4g']), // 75% wifi
+    batteryBase:         Math.round((0.3 + Math.random() * 0.65) * 100) / 100, // 0.30–0.95
   };
 }
 

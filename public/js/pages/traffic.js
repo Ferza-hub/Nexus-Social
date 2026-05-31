@@ -731,16 +731,29 @@ const TrafficPage = (() => {
 
   function _addResidentialProxies() {
     Modal.open('Bulk Import Residential Proxies', `
-      <div class="form-group">
-        <label>Protocol</label>
-        <select id="tr-proxy-protocol">
-          <option value="http">HTTP</option>
-          <option value="https">HTTPS</option>
-          <option value="socks5">SOCKS5</option>
-        </select>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem">
+        <div class="form-group">
+          <label>Protocol</label>
+          <select id="tr-proxy-protocol">
+            <option value="http">HTTP</option>
+            <option value="https">HTTPS</option>
+            <option value="socks5">SOCKS5</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Proxy Region <span class="text-muted text-sm">(for timezone sync)</span></label>
+          <select id="tr-proxy-region">
+            <option value="">— Unknown —</option>
+            <option value="us">🇺🇸 US / Canada</option>
+            <option value="eu">🇪🇺 Europe</option>
+            <option value="as">🌏 Asia</option>
+            <option value="au">🇦🇺 Australia</option>
+            <option value="br">🇧🇷 Brazil / LatAm</option>
+          </select>
+        </div>
       </div>
       <div class="form-group">
-        <label>Proxies <span class="text-muted text-sm">— one per line, format: host:port:user:pass</span></label>
+        <label>Proxies <span class="text-muted text-sm">— one per line: host:port:user:pass</span></label>
         <textarea id="tr-proxy-lines" rows="10" style="width:100%;box-sizing:border-box;font-family:monospace;font-size:.82rem"
           placeholder="gate.example.com:10000:user1:pass1&#10;gate.example.com:10001:user2:pass2&#10;1.2.3.4:8080:user:pass"></textarea>
       </div>
@@ -752,8 +765,9 @@ const TrafficPage = (() => {
   }
 
   async function _submitBulkResidential() {
-    const protocol = document.getElementById('tr-proxy-protocol')?.value ?? 'http';
-    const raw = document.getElementById('tr-proxy-lines')?.value ?? '';
+    const protocol  = document.getElementById('tr-proxy-protocol')?.value ?? 'http';
+    const geoRegion = document.getElementById('tr-proxy-region')?.value   || undefined;
+    const raw  = document.getElementById('tr-proxy-lines')?.value ?? '';
     const lines = raw.split('\n').map(l => l.trim()).filter(Boolean);
     if (!lines.length) return Toast.error('Paste at least one proxy line');
 
@@ -765,6 +779,7 @@ const TrafficPage = (() => {
         lines,
         protocol,
         proxy_type: 'residential',
+        geo_region: geoRegion,
       });
       if (resultEl) {
         resultEl.innerHTML = `<span style="color:#22c55e">✓ Added ${data.inserted} of ${lines.length}</span>` +

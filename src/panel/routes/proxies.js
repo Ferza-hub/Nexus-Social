@@ -41,7 +41,7 @@ router.post('/', (req, res) => {
 // POST /api/proxies/bulk — import multiple proxies (host:port:user:pass format)
 router.post('/bulk', (req, res) => {
   try {
-    const { lines, protocol = 'http', proxy_type = 'dedicated' } = req.body;
+    const { lines, protocol = 'http', proxy_type = 'dedicated', geo_region } = req.body;
     if (!Array.isArray(lines)) return res.status(400).json({ error: 'lines must be an array' });
 
     const inserted = [];
@@ -53,7 +53,7 @@ router.post('/bulk', (req, res) => {
       const [host, port, username, password] = parts;
       if (!host || !port || isNaN(Number(port))) { errors.push(`Invalid: ${line}`); continue; }
       try {
-        const id = am.addProxy({ host, port: Number(port), username, password, protocol, proxyType: proxy_type });
+        const id = am.addProxy({ host, port: Number(port), username, password, protocol, proxyType: proxy_type, geoRegion: geo_region });
         inserted.push(id);
       } catch (e) {
         errors.push(`${line}: ${e.message}`);
