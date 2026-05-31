@@ -489,12 +489,42 @@ function _getResidentialProxies() {
   return _residentialProxies;
 }
 
+// In-memory proxy failure tracker — resets on process restart
+// Proxies with PROXY_SKIP_THRESHOLD failures within PROXY_SKIP_WINDOW_MS
+// are deprioritised (we fall back to them only if nothing else is available)
+const _proxyFailures  = new Map();
+const PROXY_SKIP_THRESHOLD = 3;
+const PROXY_SKIP_WINDOW_MS = 30 * 60 * 1000; // 30 minutes
+
+function recordProxyFailure(proxyId) {
+  if (!proxyId) return;
+  const now   = Date.now();
+  const entry = _proxyFailures.get(proxyId) ?? { count: 0, lastAt: 0 };
+  if (now - entry.lastAt > PROXY_SKIP_WINDOW_MS) entry.count = 0; // window expired
+  entry.count++;
+  entry.lastAt = now;
+  _proxyFailures.set(proxyId, entry);
+  if (entry.count >= PROXY_SKIP_THRESHOLD) {
+    log.warn('Proxy temporarily deprioritised after repeated failures', { proxyId, count: entry.count });
+  }
+}
+
+function _isProxyBad(proxyId) {
+  const entry = _proxyFailures.get(proxyId);
+  if (!entry || entry.count < PROXY_SKIP_THRESHOLD) return false;
+  return Date.now() - entry.lastAt <= PROXY_SKIP_WINDOW_MS;
+}
+
 // Pick proxy that matches ghost's region (timezone geo) when possible
+// Skips proxies with too many recent failures unless there's no alternative
 function _pickProxyForRegion(region) {
   const all = _getResidentialProxies();
   if (!all.length) return null;
-  const matching = all.filter(p => p.geo_region === region);
-  return matching.length > 0 ? pick(matching) : pick(all);
+
+  const good     = all.filter(p => !_isProxyBad(p.id));
+  const pool     = good.length > 0 ? good : all;           // fallback to all if every proxy is bad
+  const matching = pool.filter(p => p.geo_region === region);
+  return matching.length > 0 ? pick(matching) : pick(pool);
 }
 
 async function launchAnonymous() {
@@ -550,6 +580,7 @@ async function launchAnonymous() {
 
   return {
     browser, context, page,
+    proxyId: proxy?.id ?? null,
     cleanup: async () => {
       try { await browser.close(); } finally { markFree(anonId); }
     },
@@ -631,10 +662,11 @@ async function launchWithGhost(ghostId) {
 
   return {
     browser, context, page, ghost,
+    proxyId: proxy?.id ?? null,
     cleanup: async () => {
       try { await browser.close(); } finally { markFree(slotId); }
     },
   };
 }
 
-module.exports = { launchForAccount, launchAnonymous, launchWithGhost, isAccountBusy, isConcurrencyFull };
+module.exports = { launchForAccount, launchAnonymous, launchWithGhost, isAccountBusy, isConcurrencyFull, recordProxyFailure };
