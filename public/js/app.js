@@ -5,6 +5,7 @@ const PAGES = {
   campaigns: CampaignsPage,
   scheduler: SchedulerPage,
   proxies:   ProxiesPage,
+  traffic:   TrafficPage,
   analytics: AnalyticsPage,
   logs:      LogsPage,
   settings:  SettingsPage,

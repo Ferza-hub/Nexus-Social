@@ -180,6 +180,38 @@ CREATE INDEX IF NOT EXISTS idx_sessions_account         ON sessions(account_id, 
 CREATE INDEX IF NOT EXISTS idx_campaigns_status         ON campaigns(status, platform);
 CREATE INDEX IF NOT EXISTS idx_post_queue_scheduled     ON post_queue(scheduled_at, status);
 CREATE INDEX IF NOT EXISTS idx_campaign_logs_campaign   ON campaign_logs(campaign_id, created_at);
+
+-- ---------------------------------------------------------------
+-- traffic_jobs: instant traffic campaigns (views / likes / follows)
+-- ---------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS traffic_jobs (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  platform        TEXT    NOT NULL,
+  action_type     TEXT    NOT NULL,
+  target_value    TEXT    NOT NULL,
+  target_count    INTEGER NOT NULL,
+  completed_count INTEGER NOT NULL DEFAULT 0,
+  status          TEXT    NOT NULL DEFAULT 'pending'
+                          CHECK(status IN ('pending','running','completed','failed','paused')),
+  created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+  started_at      DATETIME,
+  completed_at    DATETIME
+);
+
+CREATE TABLE IF NOT EXISTS traffic_logs (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  job_id     INTEGER NOT NULL REFERENCES traffic_jobs(id) ON DELETE CASCADE,
+  account_id INTEGER NOT NULL,
+  platform   TEXT    NOT NULL,
+  action     TEXT    NOT NULL,
+  status     TEXT    NOT NULL CHECK(status IN ('success','failed','skipped')),
+  message    TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_traffic_jobs_status ON traffic_jobs(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_traffic_logs_job    ON traffic_logs(job_id, created_at);
 `;
 
 function runMigrations(db) {
