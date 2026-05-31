@@ -226,6 +226,35 @@ function runMigrations(db) {
   addCol('accounts', 'account_role',  `TEXT NOT NULL DEFAULT 'managed'`);
   addCol('traffic_jobs', 'account_scope', `TEXT NOT NULL DEFAULT 'traffic'`);
   addCol('proxies', 'proxy_type', `TEXT NOT NULL DEFAULT 'dedicated'`);
+
+  // Ghost profiles tables
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS ghost_profiles (
+      id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+      fingerprint_json    TEXT    NOT NULL,
+      storage_state_path  TEXT,
+      status              TEXT    NOT NULL DEFAULT 'cold'
+                          CHECK(status IN ('cold','warming','ready','retired')),
+      warmup_done         INTEGER NOT NULL DEFAULT 0,
+      use_count           INTEGER NOT NULL DEFAULT 0,
+      use_today           INTEGER NOT NULL DEFAULT 0,
+      today_date          TEXT,
+      last_used_at        DATETIME,
+      created_at          DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at          DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS ghost_logs (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      ghost_id   INTEGER NOT NULL REFERENCES ghost_profiles(id) ON DELETE CASCADE,
+      platform   TEXT    NOT NULL,
+      action     TEXT    NOT NULL,
+      status     TEXT    NOT NULL CHECK(status IN ('success','failed')),
+      message    TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_ghost_profiles_status ON ghost_profiles(status, last_used_at);
+    CREATE INDEX IF NOT EXISTS idx_ghost_logs_ghost      ON ghost_logs(ghost_id, created_at);
+  `);
 }
 
 module.exports = { runMigrations };

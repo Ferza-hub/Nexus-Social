@@ -1,7 +1,8 @@
 'use strict';
 
 const { makeLogger } = require('../utils/logger');
-const { launchForAccount, launchAnonymous, isAccountBusy, isConcurrencyFull } = require('./browser');
+const { launchForAccount, launchAnonymous, launchWithGhost, isAccountBusy, isConcurrencyFull } = require('./browser');
+const gm = require('../ghost/manager');
 const { saveSession } = require('../account-manager/session-manager');
 const am = require('../account-manager/index');
 
@@ -418,6 +419,149 @@ async function executeAnonymousView(platform, url) {
 }
 
 // ----------------------------------------------------------------
+// Ghost view — uses persistent browser identity
+// Falls back to pure anonymous if no ghost is ready
+// ----------------------------------------------------------------
+
+function _randInt(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
+function _delay(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+function _extractYouTubeId(url) {
+  try {
+    const u = new URL(url);
+    if (u.searchParams.get('v'))           return u.searchParams.get('v');
+    if (u.pathname.includes('/shorts/'))   return u.pathname.split('/shorts/')[1]?.split('?')[0];
+    if (u.hostname === 'youtu.be')         return u.pathname.slice(1).split('?')[0];
+    return null;
+  } catch (_) { return null; }
+}
+
+async function _youtubeGhostView(page, url) {
+  const videoId = _extractYouTubeId(url);
+
+  // Land on YouTube homepage (ghost has cookies — looks like returning visitor)
+  await page.goto('https://www.youtube.com/', {
+    waitUntil: 'domcontentloaded', timeout: 45_000,
+  });
+  await _delay(_randInt(1500, 3000));
+
+  // Dismiss any popup
+  for (const sel of _DISMISS_SELECTORS.youtube) {
+    try {
+      const el = await page.$(sel);
+      if (el) { await el.click(); await _delay(600); }
+    } catch (_) {}
+  }
+
+  // Search for video ID (natural: user searches, not pastes URL)
+  let navigated = false;
+  if (videoId) {
+    try {
+      await page.click('input[name="search_query"]', { timeout: 5000 });
+      await _delay(_randInt(400, 900));
+      for (const ch of videoId) {
+        await page.keyboard.type(ch);
+        await _delay(_randInt(40, 120));
+      }
+      await page.keyboard.press('Enter');
+      await _delay(_randInt(2000, 4000));
+
+      // Click matching result in search page
+      const link = await page.$(`a[href*="${videoId}"]`);
+      if (link) {
+        await link.click();
+        navigated = true;
+        await _delay(_randInt(2000, 4000));
+      }
+    } catch (_) {}
+  }
+
+  if (!navigated) {
+    // Fallback: direct navigation (still better than fresh anonymous because we have cookies)
+    await page.goto(_cleanYoutubeUrl(url), { waitUntil: 'domcontentloaded', timeout: 45_000 });
+    await _delay(_randInt(2000, 3500));
+  }
+
+  // Dismiss sign-in prompts that may appear after landing on video
+  for (const sel of _DISMISS_SELECTORS.youtube) {
+    try {
+      const el = await page.$(sel);
+      if (el) { await el.click(); await _delay(500); }
+    } catch (_) {}
+  }
+
+  // Ensure video plays
+  try {
+    await page.waitForSelector('video', { timeout: 8000 });
+    const isPaused = await page.evaluate(() => document.querySelector('video')?.paused ?? true);
+    if (isPaused) await page.click('#movie_player, video').catch(() => {});
+  } catch (_) {}
+
+  // Natural interaction while watching
+  const isShorts = url.includes('/shorts/');
+  const watchMs  = isShorts ? _randInt(8_000, 20_000) : _randInt(20_000, 45_000);
+  const midPoint = Math.floor(watchMs / 2);
+
+  await _delay(midPoint);
+  // Micro-scroll (human restlessness)
+  await page.mouse.wheel(0, _randInt(30, 100)).catch(() => {});
+  await _delay(_randInt(500, 1500));
+  await page.mouse.wheel(0, -_randInt(20, 60)).catch(() => {});
+  await _delay(watchMs - midPoint);
+}
+
+async function executeGhostView(platform, url) {
+  const ghost = gm.pickGhost();
+
+  // No ghost ready → fall back to anonymous
+  if (!ghost) {
+    log.debug('No ghost available — falling back to anonymous');
+    return executeAnonymousView(platform, url);
+  }
+
+  let session = null;
+  try {
+    session = await launchWithGhost(ghost.id);
+    const { page, context } = session;
+
+    if (platform === 'youtube') {
+      await _youtubeGhostView(page, url);
+    } else {
+      // Generic path for other platforms: referer + dismiss + scroll + watch
+      const refList = _REFERRERS[platform] ?? [null];
+      const referer = refList[Math.floor(Math.random() * refList.length)] ?? undefined;
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45_000, referer });
+      await _delay(_randInt(1500, 3000));
+      for (const sel of (_DISMISS_SELECTORS[platform] ?? [])) {
+        try { const el = await page.$(sel); if (el) { await el.click(); await _delay(500); } } catch (_) {}
+      }
+      const scrolls = _randInt(1, 3);
+      for (let i = 0; i < scrolls; i++) {
+        await page.mouse.wheel(0, _randInt(80, 200));
+        await _delay(_randInt(500, 1200));
+      }
+      await _delay(_randInt(8_000, 20_000));
+    }
+
+    // Save updated storageState — ghost's history grows with every view
+    const state = await context.storageState();
+    gm.saveStorageState(ghost.id, state);
+    gm.recordUse(ghost.id);
+    gm.logAction(ghost.id, platform, 'view', 'success');
+
+    log.info('Ghost view done', { ghostId: ghost.id, platform });
+    return { success: true };
+
+  } catch (err) {
+    log.warn('Ghost view failed', { ghostId: ghost.id, platform, err: err.message });
+    gm.logAction(ghost.id, platform, 'view', 'failed', err.message);
+    return { success: false, reason: err.message };
+  } finally {
+    if (session) await session.cleanup();
+  }
+}
+
+// ----------------------------------------------------------------
 // Convenience: run login + save session for a fresh account
 // ----------------------------------------------------------------
 
@@ -428,5 +572,6 @@ async function loginAndSaveSession(accountId, platform) {
 module.exports = {
   executeAction,
   executeAnonymousView,
+  executeGhostView,
   loginAndSaveSession,
 };

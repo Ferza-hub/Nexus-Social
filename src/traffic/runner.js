@@ -1,6 +1,6 @@
 'use strict';
 
-const { executeAction, executeAnonymousView } = require('../playwright-engine/index');
+const { executeAction, executeAnonymousView, executeGhostView } = require('../playwright-engine/index');
 const { getDb }         = require('../database/db');
 const { makeLogger }    = require('../utils/logger');
 
@@ -135,7 +135,7 @@ async function runJob(jobId) {
 
       const worker = async () => {
         while (completed < job.target_count && !stopped && !aborted) {
-          const result = await executeAnonymousView(job.platform, targetValue);
+          const result = await executeGhostView(job.platform, targetValue);
           logView(result.success ? 'success' : 'failed', result.reason);
 
           if (result.success) {

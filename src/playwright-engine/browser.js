@@ -5,6 +5,7 @@ const { makeLogger } = require('../utils/logger');
 const { loadSession } = require('../account-manager/session-manager');
 const { getProxyForAccount } = require('../account-manager/index');
 const { getDb } = require('../database/db');
+const fs = require('fs');
 
 const log = makeLogger('Browser');
 
@@ -446,4 +447,80 @@ async function launchAnonymous() {
   };
 }
 
-module.exports = { launchForAccount, launchAnonymous, isAccountBusy, isConcurrencyFull };
+// ----------------------------------------------------------------
+// Launch browser as a specific ghost
+// Ghost identity: fixed fingerprint + persistent storageState
+// Proxy: random residential from pool (not fixed to ghost)
+// ----------------------------------------------------------------
+
+async function launchWithGhost(ghostId) {
+  if (isConcurrencyFull()) {
+    throw new Error(`Concurrent browser limit reached (${MAX_CONCURRENT}). Try again later.`);
+  }
+
+  const gm    = require('../ghost/manager');
+  const ghost = getDb().prepare('SELECT * FROM ghost_profiles WHERE id=?').get(ghostId);
+  if (!ghost) throw new Error(`Ghost ${ghostId} not found`);
+
+  const fp = JSON.parse(ghost.fingerprint_json);
+
+  // Pick random available residential proxy
+  const proxies = _getResidentialProxies();
+  const proxy   = proxies.length > 0 ? pick(proxies) : null;
+
+  const slotId = `ghost_${ghostId}`;
+
+  const launchOptions = {
+    headless: true,
+    args: [
+      '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
+      '--disable-blink-features=AutomationControlled', '--disable-infobars',
+      '--disable-extensions', '--disable-default-apps', '--no-first-run',
+      '--no-default-browser-check', '--disable-features=TranslateUI,VizDisplayCompositor',
+      '--disable-ipc-flooding-protection', '--password-store=basic', '--use-mock-keychain',
+      '--disable-rtc-smoothness-algorithm', '--disable-webrtc-hw-encoding',
+      '--disable-webrtc-hw-decoding', '--enforce-webrtc-ip-permission-check',
+      `--window-size=${fp.viewport.width},${fp.viewport.height}`,
+    ],
+  };
+
+  if (proxy) {
+    launchOptions.proxy = {
+      server:   `${proxy.protocol}://${proxy.host}:${proxy.port}`,
+      username: proxy.username ?? undefined,
+      password: proxy.password ?? undefined,
+    };
+  }
+
+  const gpuPair      = [fp.gpuVendor, fp.gpuRenderer];
+  const storageState = gm.loadStorageState(ghostId);
+
+  const browser  = await chromium.launch(launchOptions);
+  const ctxOpts  = {
+    viewport:    fp.viewport,
+    userAgent:   fp.userAgent,
+    locale:      fp.locale,
+    timezoneId:  fp.timezone,
+    extraHTTPHeaders: { 'Accept-Language': fp.acceptLanguage },
+  };
+  if (storageState) ctxOpts.storageState = storageState;
+
+  const context = await browser.newContext(ctxOpts);
+  await context.addInitScript(buildFingerprintScript(fp.canvasSeed, fp.viewport, fp.userAgent, gpuPair));
+  const page = await context.newPage();
+
+  markBusy(slotId);
+  log.info('Ghost browser launched', {
+    ghostId,
+    proxy: proxy ? `${proxy.host}:${proxy.port}` : 'datacenter',
+  });
+
+  return {
+    browser, context, page, ghost,
+    cleanup: async () => {
+      try { await browser.close(); } finally { markFree(slotId); }
+    },
+  };
+}
+
+module.exports = { launchForAccount, launchAnonymous, launchWithGhost, isAccountBusy, isConcurrencyFull };

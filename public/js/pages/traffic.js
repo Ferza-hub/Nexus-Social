@@ -151,6 +151,32 @@ const TrafficPage = (() => {
           </div>
           <div id="tr-proxy-summary">Loading…</div>
         </div>
+      </div>
+
+      <div style="margin-top:1.5rem">
+        <div class="card" style="padding:1.25rem">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.25rem">
+            <div>
+              <h3 style="margin:0;font-size:.95rem">Ghost Pool
+                <span class="text-muted text-sm">(Persistent anonymous identities)</span>
+              </h3>
+              <div class="text-muted text-sm" style="margin-top:.2rem">
+                Each ghost has permanent cookies + fingerprint — looks like a returning real visitor
+              </div>
+            </div>
+            <div style="display:flex;gap:.5rem">
+              <button class="btn btn-ghost btn-sm" onclick="TrafficPage._warmupGhosts()">⚡ Warmup Cold</button>
+              <button class="btn btn-primary btn-sm" onclick="TrafficPage._createGhosts()">+ Create Ghosts</button>
+            </div>
+          </div>
+          <div id="tr-ghost-stats" style="margin:1rem 0">Loading…</div>
+          <div id="tr-ghost-hint" class="text-muted text-sm"
+            style="padding:.6rem .85rem;background:var(--bg-2);border-radius:6px;line-height:1.5">
+            <strong>How it works:</strong>
+            Create ghosts → Warmup (visits YouTube, gets cookies) → Ready ghosts are used for views.
+            Each view updates the ghost's watch history. More views = more trusted.
+          </div>
+        </div>
       </div>`;
 
     _refreshActionGrid(_platform);
@@ -158,6 +184,7 @@ const TrafficPage = (() => {
     _loadHistory();
     _loadTrafficAccounts();
     _loadResidentialProxies();
+    _loadGhostStats();
   }
 
   function destroy() {
@@ -590,6 +617,86 @@ const TrafficPage = (() => {
   }
 
   // ----------------------------------------------------------------
+  // Ghost pool panel
+  // ----------------------------------------------------------------
+
+  async function _loadGhostStats() {
+    const el = document.getElementById('tr-ghost-stats');
+    if (!el) return;
+    try {
+      const s = await API.get('/api/ghosts/stats');
+      if (!s.total) {
+        el.innerHTML = `<div class="text-muted text-sm">No ghosts yet. Create some to get started.</div>`;
+        return;
+      }
+      el.innerHTML = `
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:.6rem">
+          ${[
+            { label: 'Ready',   val: s.ready,   color: '#22c55e' },
+            { label: 'Cold',    val: s.cold,    color: '#f59e0b' },
+            { label: 'Warming', val: s.warming, color: '#3b82f6' },
+            { label: 'Total',   val: s.total,   color: 'var(--text)' },
+          ].map(x => `
+            <div style="background:var(--bg-2);border-radius:6px;padding:.7rem;text-align:center">
+              <div style="font-size:1.4rem;font-weight:700;color:${x.color}">${x.val ?? 0}</div>
+              <div style="font-size:.75rem;color:var(--text-muted)">${x.label}</div>
+            </div>`).join('')}
+        </div>
+        ${s.ready > 0
+          ? `<div class="text-muted text-sm" style="margin-top:.6rem">
+               ${s.ready} ghost${s.ready !== 1 ? 's' : ''} ready — views will use these identities
+             </div>`
+          : `<div style="color:#f59e0b;font-size:.82rem;margin-top:.6rem">
+               No ready ghosts — click <strong>Warmup Cold</strong> to activate them
+             </div>`}`;
+    } catch (_) {
+      if (el) el.innerHTML = '<div class="text-muted text-sm">Failed to load ghost stats.</div>';
+    }
+  }
+
+  function _createGhosts() {
+    Modal.open('Create Ghost Pool', `
+      <div class="form-group">
+        <label>Number of ghosts to create</label>
+        <input type="number" id="tr-ghost-count" value="20" min="1" max="200"
+          style="width:100%;box-sizing:border-box">
+        <div class="text-muted text-sm" style="margin-top:.3rem">
+          Each ghost gets a unique browser fingerprint (UA, GPU, timezone, canvas seed).
+          After creation, run Warmup to give them YouTube cookies.
+        </div>
+      </div>
+      <div class="flex gap-1" style="justify-content:flex-end;margin-top:.5rem">
+        <button class="btn btn-ghost" onclick="Modal.close()">Cancel</button>
+        <button class="btn btn-primary" onclick="TrafficPage._submitCreateGhosts()">Create</button>
+      </div>`);
+  }
+
+  async function _submitCreateGhosts() {
+    const count = Number(document.getElementById('tr-ghost-count')?.value ?? 20);
+    if (!count || count < 1) return Toast.error('Enter a valid count');
+    try {
+      const data = await API.post('/api/ghosts', { count });
+      Toast.success(`Created ${data.created} ghosts — now run Warmup to activate them`);
+      Modal.close();
+      await _loadGhostStats();
+    } catch (err) { Toast.error(err.message); }
+  }
+
+  async function _warmupGhosts() {
+    try {
+      const data = await API.post('/api/ghosts/warmup', { count: 5 });
+      Toast.success(data.message);
+      // Poll stats to show warming progress
+      const poll = setInterval(async () => {
+        await _loadGhostStats();
+        const s = await API.get('/api/ghosts/stats').catch(() => null);
+        if (!s || s.warming === 0) clearInterval(poll);
+      }, 5000);
+      setTimeout(() => clearInterval(poll), 120_000);
+    } catch (err) { Toast.error(err.message); }
+  }
+
+  // ----------------------------------------------------------------
   // Residential proxies panel
   // ----------------------------------------------------------------
 
@@ -687,5 +794,5 @@ const TrafficPage = (() => {
     return `${Math.floor(h / 24)}d ago`;
   }
 
-  return { render, destroy, _setScope, _setPlatform, _setAction, _start, _stop, _delete, _watchJob, _addTrafficAccounts, _submitBulkTraffic, _addResidentialProxies, _submitBulkResidential };
+  return { render, destroy, _setScope, _setPlatform, _setAction, _start, _stop, _delete, _watchJob, _addTrafficAccounts, _submitBulkTraffic, _addResidentialProxies, _submitBulkResidential, _createGhosts, _submitCreateGhosts, _warmupGhosts };
 })();
