@@ -6,13 +6,18 @@ const am = require('../../account-manager/index');
 
 const router = Router();
 
-// GET /api/proxies
+// GET /api/proxies?type=dedicated|residential
 router.get('/', (req, res) => {
   try {
+    const { type } = req.query;
+    const typeFilter = type === 'residential' ? "AND p.proxy_type='residential'"
+                     : type === 'dedicated'   ? "AND p.proxy_type='dedicated'"
+                     : '';
     const proxies = getDb().prepare(`
       SELECT p.*, a.username as assigned_to
       FROM proxies p
       LEFT JOIN accounts a ON a.id = p.assigned_account_id
+      WHERE 1=1 ${typeFilter}
       ORDER BY p.created_at DESC
     `).all();
     res.json(proxies);
@@ -24,9 +29,9 @@ router.get('/', (req, res) => {
 // POST /api/proxies — add single proxy
 router.post('/', (req, res) => {
   try {
-    const { host, port, username, password, protocol } = req.body;
+    const { host, port, username, password, protocol, proxy_type } = req.body;
     if (!host || !port) return res.status(400).json({ error: 'host and port required' });
-    const id = am.addProxy({ host, port: Number(port), username, password, protocol });
+    const id = am.addProxy({ host, port: Number(port), username, password, protocol, proxyType: proxy_type });
     res.status(201).json({ id });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -36,7 +41,7 @@ router.post('/', (req, res) => {
 // POST /api/proxies/bulk — import multiple proxies (host:port:user:pass format)
 router.post('/bulk', (req, res) => {
   try {
-    const { lines, protocol = 'http' } = req.body;
+    const { lines, protocol = 'http', proxy_type = 'dedicated' } = req.body;
     if (!Array.isArray(lines)) return res.status(400).json({ error: 'lines must be an array' });
 
     const inserted = [];
@@ -48,7 +53,7 @@ router.post('/bulk', (req, res) => {
       const [host, port, username, password] = parts;
       if (!host || !port || isNaN(Number(port))) { errors.push(`Invalid: ${line}`); continue; }
       try {
-        const id = am.addProxy({ host, port: Number(port), username, password, protocol });
+        const id = am.addProxy({ host, port: Number(port), username, password, protocol, proxyType: proxy_type });
         inserted.push(id);
       } catch (e) {
         errors.push(`${line}: ${e.message}`);
@@ -56,6 +61,18 @@ router.post('/bulk', (req, res) => {
     }
 
     res.json({ inserted: inserted.length, ids: inserted, errors });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/proxies/residential/count
+router.get('/residential/count', (req, res) => {
+  try {
+    const row = getDb().prepare(
+      `SELECT COUNT(*) AS total, SUM(CASE WHEN status='active' THEN 1 ELSE 0 END) AS active FROM proxies WHERE proxy_type='residential'`
+    ).get();
+    res.json({ total: row?.total ?? 0, active: row?.active ?? 0 });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

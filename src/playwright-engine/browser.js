@@ -4,6 +4,7 @@ const { chromium } = require('playwright');
 const { makeLogger } = require('../utils/logger');
 const { loadSession } = require('../account-manager/session-manager');
 const { getProxyForAccount } = require('../account-manager/index');
+const { getDb } = require('../database/db');
 
 const log = makeLogger('Browser');
 
@@ -367,6 +368,25 @@ async function launchForAccount(accountId, platform) {
 
 let _anonSeq = 0;
 
+// Cached residential proxy pool — refreshed every 60 seconds
+let _residentialProxies = null;
+let _residentialCacheAt  = 0;
+
+function _getResidentialProxies() {
+  const now = Date.now();
+  if (!_residentialProxies || now - _residentialCacheAt > 60_000) {
+    try {
+      _residentialProxies = getDb().prepare(
+        `SELECT * FROM proxies WHERE proxy_type='residential' AND status='active'`
+      ).all();
+      _residentialCacheAt = now;
+    } catch (_) {
+      _residentialProxies = [];
+    }
+  }
+  return _residentialProxies;
+}
+
 async function launchAnonymous() {
   if (isConcurrencyFull()) {
     throw new Error(`Concurrent browser limit reached (${MAX_CONCURRENT}). Try again later.`);
@@ -377,6 +397,9 @@ async function launchAnonymous() {
   const ua = pick(USER_AGENTS);
   const gpuPair = pick(GPU_PAIRS);
   const seed = randInt(100000, 999999999);
+
+  const residentials = _getResidentialProxies();
+  const proxy = residentials.length > 0 ? pick(residentials) : null;
 
   const launchOptions = {
     headless: true,
@@ -389,6 +412,14 @@ async function launchAnonymous() {
       `--window-size=${viewport.width},${viewport.height}`,
     ],
   };
+
+  if (proxy) {
+    launchOptions.proxy = {
+      server:   `${proxy.protocol}://${proxy.host}:${proxy.port}`,
+      username: proxy.username ?? undefined,
+      password: proxy.password ?? undefined,
+    };
+  }
 
   const timezone = pick(ANON_TIMEZONES);
   const [locale, acceptLang] = pick(ANON_LOCALES);
@@ -405,7 +436,7 @@ async function launchAnonymous() {
   const page = await context.newPage();
 
   markBusy(anonId);
-  log.info('Launched anonymous browser');
+  log.info('Launched anonymous browser', { proxy: proxy ? `${proxy.host}:${proxy.port}` : 'datacenter' });
 
   return {
     browser, context, page,

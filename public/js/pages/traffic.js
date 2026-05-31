@@ -130,15 +130,26 @@ const TrafficPage = (() => {
         </div>
       </div>
 
-      <div style="margin-top:1.5rem">
+      <div style="margin-top:1.5rem;display:grid;grid-template-columns:1fr 1fr;gap:1.5rem">
         <div class="card" style="padding:1.25rem">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.9rem">
-            <h3 style="margin:0;font-size:.95rem">Traffic Accounts <span class="text-muted text-sm">(for Likes &amp; Followers)</span></h3>
+            <h3 style="margin:0;font-size:.95rem">Traffic Accounts <span class="text-muted text-sm">(Likes &amp; Followers)</span></h3>
             <button class="btn btn-primary btn-sm" onclick="TrafficPage._addTrafficAccounts()">+ Bulk Import</button>
           </div>
-          <div id="tr-acct-summary" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:.5rem">
+          <div id="tr-acct-summary" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:.5rem">
             Loading…
           </div>
+        </div>
+
+        <div class="card" style="padding:1.25rem">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.9rem">
+            <div>
+              <h3 style="margin:0;font-size:.95rem">Residential Proxies <span class="text-muted text-sm">(Anonymous Views)</span></h3>
+              <div class="text-muted text-sm" style="margin-top:.2rem">Rotating per view · improves retention</div>
+            </div>
+            <button class="btn btn-primary btn-sm" onclick="TrafficPage._addResidentialProxies()">+ Bulk Import</button>
+          </div>
+          <div id="tr-proxy-summary">Loading…</div>
         </div>
       </div>`;
 
@@ -146,6 +157,7 @@ const TrafficPage = (() => {
     _refreshAvailability(_platform);
     _loadHistory();
     _loadTrafficAccounts();
+    _loadResidentialProxies();
   }
 
   function destroy() {
@@ -235,11 +247,19 @@ const TrafficPage = (() => {
   async function _refreshAvailability(platform) {
     const el = document.getElementById('tr-avail');
 
-    // Instant mode + views = anonymous, no accounts needed
+    // Instant mode + views = anonymous, show proxy info
     if (ANON_ACTIONS.has(_actionType) && _scope === 'instant') {
       if (el) {
-        el.textContent = 'Anonymous traffic';
-        el.style.color = 'var(--text-success, #22c55e)';
+        try {
+          const pdata = await API.get('/api/proxies/residential/count');
+          el.textContent = pdata.active > 0
+            ? `Anonymous · ${pdata.active} residential proxies`
+            : 'Anonymous (datacenter IP)';
+          el.style.color = pdata.active > 0 ? 'var(--text-success, #22c55e)' : '#f59e0b';
+        } catch (_) {
+          el.textContent = 'Anonymous traffic';
+          el.style.color = 'var(--text-success, #22c55e)';
+        }
       }
       const warn = document.getElementById('tr-capacity-warn');
       if (warn) warn.style.display = 'none';
@@ -569,6 +589,94 @@ const TrafficPage = (() => {
     }
   }
 
+  // ----------------------------------------------------------------
+  // Residential proxies panel
+  // ----------------------------------------------------------------
+
+  async function _loadResidentialProxies() {
+    const el = document.getElementById('tr-proxy-summary');
+    if (!el) return;
+    try {
+      const data = await API.get('/api/proxies/residential/count');
+      if (data.total === 0) {
+        el.innerHTML = `
+          <div style="color:var(--text-muted);font-size:.87rem;padding:.5rem 0">
+            No residential proxies yet. Import to boost view retention.
+          </div>`;
+        return;
+      }
+      el.innerHTML = `
+        <div style="display:flex;gap:1rem;margin-bottom:.6rem">
+          <div style="background:var(--bg-2);border-radius:6px;padding:.7rem 1rem;flex:1;text-align:center">
+            <div style="font-size:1.5rem;font-weight:700;color:#22c55e">${data.active}</div>
+            <div style="font-size:.75rem;color:var(--text-muted)">Active</div>
+          </div>
+          <div style="background:var(--bg-2);border-radius:6px;padding:.7rem 1rem;flex:1;text-align:center">
+            <div style="font-size:1.5rem;font-weight:700">${data.total}</div>
+            <div style="font-size:.75rem;color:var(--text-muted)">Total</div>
+          </div>
+        </div>
+        <div class="text-muted text-sm">Each anonymous view uses a random proxy from this pool.</div>`;
+    } catch (_) {
+      if (el) el.innerHTML = '<div class="text-muted text-sm">Failed to load proxy stats.</div>';
+    }
+  }
+
+  function _addResidentialProxies() {
+    Modal.open('Bulk Import Residential Proxies', `
+      <div class="form-group">
+        <label>Protocol</label>
+        <select id="tr-proxy-protocol">
+          <option value="http">HTTP</option>
+          <option value="https">HTTPS</option>
+          <option value="socks5">SOCKS5</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Proxies <span class="text-muted text-sm">— one per line, format: host:port:user:pass</span></label>
+        <textarea id="tr-proxy-lines" rows="10" style="width:100%;box-sizing:border-box;font-family:monospace;font-size:.82rem"
+          placeholder="gate.example.com:10000:user1:pass1&#10;gate.example.com:10001:user2:pass2&#10;1.2.3.4:8080:user:pass"></textarea>
+      </div>
+      <div id="tr-proxy-result" style="font-size:.82rem;margin-bottom:.5rem"></div>
+      <div class="flex gap-1" style="justify-content:flex-end">
+        <button class="btn btn-ghost" onclick="Modal.close()">Cancel</button>
+        <button class="btn btn-primary" onclick="TrafficPage._submitBulkResidential()">Import</button>
+      </div>`);
+  }
+
+  async function _submitBulkResidential() {
+    const protocol = document.getElementById('tr-proxy-protocol')?.value ?? 'http';
+    const raw = document.getElementById('tr-proxy-lines')?.value ?? '';
+    const lines = raw.split('\n').map(l => l.trim()).filter(Boolean);
+    if (!lines.length) return Toast.error('Paste at least one proxy line');
+
+    const resultEl = document.getElementById('tr-proxy-result');
+    if (resultEl) resultEl.textContent = 'Importing…';
+
+    try {
+      const data = await API.post('/api/proxies/bulk', {
+        lines,
+        protocol,
+        proxy_type: 'residential',
+      });
+      if (resultEl) {
+        resultEl.innerHTML = `<span style="color:#22c55e">✓ Added ${data.inserted} of ${lines.length}</span>` +
+          (data.errors?.length
+            ? ` — ${data.errors.slice(0, 3).join(', ')}`
+            : '');
+      }
+      if (data.inserted > 0) {
+        await _loadResidentialProxies();
+        if (ANON_ACTIONS.has(_actionType) && _scope === 'instant') {
+          _refreshAvailability(_platform);
+        }
+        setTimeout(() => Modal.close(), 1200);
+      }
+    } catch (err) {
+      Toast.error(err.message);
+    }
+  }
+
   function _age(isoStr) {
     const diff = Date.now() - new Date(isoStr).getTime();
     const m    = Math.floor(diff / 60000);
@@ -579,5 +687,5 @@ const TrafficPage = (() => {
     return `${Math.floor(h / 24)}d ago`;
   }
 
-  return { render, destroy, _setScope, _setPlatform, _setAction, _start, _stop, _delete, _watchJob, _addTrafficAccounts, _submitBulkTraffic };
+  return { render, destroy, _setScope, _setPlatform, _setAction, _start, _stop, _delete, _watchJob, _addTrafficAccounts, _submitBulkTraffic, _addResidentialProxies, _submitBulkResidential };
 })();

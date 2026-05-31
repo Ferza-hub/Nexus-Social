@@ -54,14 +54,15 @@ function listAccounts(platform = null, status = null) {
 // Proxy management
 // ----------------------------------------------------------------
 
-function addProxy({ host, port, username, password, protocol = 'http' }) {
+function addProxy({ host, port, username, password, protocol = 'http', proxyType = 'dedicated' }) {
   const db = getDb();
+  const type = proxyType === 'residential' ? 'residential' : 'dedicated';
   const result = db.prepare(`
-    INSERT INTO proxies (host, port, username, password, protocol)
-    VALUES (?, ?, ?, ?, ?)
-  `).run(host, port, username ?? null, password ?? null, protocol);
+    INSERT INTO proxies (host, port, username, password, protocol, proxy_type)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(host, port, username ?? null, password ?? null, protocol, type);
 
-  log.info('Proxy added', { id: result.lastInsertRowid, host, port });
+  log.info('Proxy added', { id: result.lastInsertRowid, host, port, type });
   return result.lastInsertRowid;
 }
 
