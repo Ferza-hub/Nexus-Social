@@ -112,6 +112,9 @@ async function runJob(jobId) {
     if (actionDef.canAnon) {
       log.info('Job started (anonymous)', { jobId, platform: job.platform, target: targetValue, total: job.target_count });
 
+      let consecutiveFails = 0;
+      const MAX_CONSEC_FAILS = 10;
+
       while (completed < job.target_count && !stopped) {
         const result = await executeAnonymousView(job.platform, targetValue);
 
@@ -123,12 +126,21 @@ async function runJob(jobId) {
 
         if (result.success) {
           completed++;
+          consecutiveFails = 0;
           db.prepare('UPDATE traffic_jobs SET completed_count=?, updated_at=? WHERE id=?')
             .run(completed, new Date().toISOString(), jobId);
           log.debug('Anonymous view done', { jobId, completed, total: job.target_count });
+        } else {
+          consecutiveFails++;
+          log.warn('Anonymous view failed', { jobId, consecutiveFails, reason: result.reason });
+          if (consecutiveFails >= MAX_CONSEC_FAILS) {
+            log.error('Too many consecutive failures — aborting job', { jobId, platform: job.platform });
+            db.prepare("UPDATE traffic_jobs SET status='failed', updated_at=? WHERE id=?")
+              .run(new Date().toISOString(), jobId);
+            return;
+          }
         }
 
-        // Short gap between browser launches
         if (!stopped && completed < job.target_count) {
           await delay(randInt(1500, 4000));
         }
@@ -158,6 +170,8 @@ async function runJob(jobId) {
 
     const params = { [actionDef.paramKey]: targetValue };
     let idx = 0;
+    let consecutiveFails = 0;
+    const MAX_CONSEC_FAILS = 10;
 
     log.info('Job started', { jobId, platform: job.platform, action: actionDef.action, target: targetValue, total: job.target_count, accounts: accounts.length });
 
@@ -182,11 +196,19 @@ async function runJob(jobId) {
 
       if (result.success) {
         completed++;
+        consecutiveFails = 0;
         db.prepare('UPDATE traffic_jobs SET completed_count=?, updated_at=? WHERE id=?')
           .run(completed, new Date().toISOString(), jobId);
         log.debug('Action succeeded', { jobId, completed, total: job.target_count });
       } else {
-        log.debug('Action skipped/failed', { jobId, accountId: account.id, reason: result.reason ?? result.message });
+        consecutiveFails++;
+        log.debug('Action skipped/failed', { jobId, accountId: account.id, consecutiveFails, reason: result.reason ?? result.message });
+        if (consecutiveFails >= MAX_CONSEC_FAILS) {
+          log.error('Too many consecutive failures — aborting job', { jobId });
+          db.prepare("UPDATE traffic_jobs SET status='failed', updated_at=? WHERE id=?")
+            .run(new Date().toISOString(), jobId);
+          return;
+        }
       }
 
       if (!stopped && completed < job.target_count) {

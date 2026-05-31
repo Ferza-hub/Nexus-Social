@@ -334,7 +334,8 @@ const TrafficPage = (() => {
           </div>
           <div style="display:flex;align-items:center;gap:.5rem">
             ${isLive ? `<span style="color:#22c55e;font-size:.8rem">● running</span>` : `<span class="text-muted text-sm">${job.status}</span>`}
-            ${isLive ? `<button class="btn btn-ghost btn-sm" onclick="TrafficPage._stop(${job.id})">■ Stop</button>` : ''}
+            ${isLive ? `<button class="btn btn-ghost btn-sm" onclick="TrafficPage._stop(${job.id})">⏸ Pause</button>` : ''}
+            <button class="btn btn-danger btn-sm" onclick="TrafficPage._delete(${job.id})">🗑</button>
           </div>
         </div>
         <div class="text-muted text-sm" style="margin-bottom:.5rem;word-break:break-all">${job.target_value}</div>
@@ -362,7 +363,23 @@ const TrafficPage = (() => {
   async function _stop(jobId) {
     try {
       await API.post(`/api/traffic/${jobId}/stop`, {});
-      Toast.success('Stop signal sent');
+      Toast.success('Job paused');
+    } catch (err) {
+      Toast.error(err.message);
+    }
+  }
+
+  async function _delete(jobId) {
+    try {
+      if (jobId === _activeId) {
+        _stopPoll();
+        _activeId = null;
+        const section = document.getElementById('tr-active-section');
+        if (section) section.style.display = 'none';
+      }
+      await API.delete(`/api/traffic/${jobId}`);
+      Toast.success('Job deleted');
+      await _loadHistory();
     } catch (err) {
       Toast.error(err.message);
     }
@@ -409,6 +426,8 @@ const TrafficPage = (() => {
                   ? `<button class="btn btn-ghost btn-sm"
                        onclick="TrafficPage._watchJob(${job.id})">Watch</button>`
                   : ''}
+                <button class="btn btn-danger btn-sm"
+                  onclick="TrafficPage._delete(${job.id})">🗑</button>
               </div>
             </div>
             <div class="text-muted text-sm" style="margin:.3rem 0;word-break:break-all">${job.target_value}</div>
@@ -518,5 +537,5 @@ const TrafficPage = (() => {
     return `${Math.floor(h / 24)}d ago`;
   }
 
-  return { render, destroy, _setPlatform, _setAction, _start, _stop, _watchJob, _addTrafficAccounts, _submitBulkTraffic };
+  return { render, destroy, _setPlatform, _setAction, _start, _stop, _delete, _watchJob, _addTrafficAccounts, _submitBulkTraffic };
 })();

@@ -115,4 +115,17 @@ router.post('/:id/stop', (req, res) => {
   }
 });
 
+// DELETE /api/traffic/:id — stop if running, then remove job + logs
+router.delete('/:id', (req, res) => {
+  try {
+    stopJob(Number(req.params.id));
+    const db = getDb();
+    db.prepare('DELETE FROM traffic_logs WHERE job_id=?').run(req.params.id);
+    db.prepare('DELETE FROM traffic_jobs WHERE id=?').run(req.params.id);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;
