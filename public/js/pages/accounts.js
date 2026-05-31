@@ -19,14 +19,14 @@ const AccountsPage = (() => {
   };
 
   const CONNECT_ERRORS = {
-    login_required:   'Wrong credentials — check username and password',
-    challenge:        'Platform requires verification (2FA or captcha) — solve it on the app first',
-    disabled:         'This account has been disabled by the platform',
-    action_block:     'Account is temporarily blocked — try again later',
-    account_busy:     'Account browser is already running — wait a moment',
-    concurrency_limit:'Too many simultaneous logins — try again shortly',
-    account_not_found:'Account not found',
-    login_failed:     'Login failed — check credentials and try again',
+    login_required:    'Wrong credentials — check username and password',
+    challenge:         'Platform requires verification — solve the captcha or 2FA prompt on the app first, then retry',
+    disabled:          'This account has been disabled by the platform',
+    action_block:      'Account is temporarily blocked — try again later',
+    account_busy:      'Account browser is already running — wait a moment',
+    concurrency_limit: 'Too many simultaneous connections — try again shortly',
+    account_not_found: 'Account not found',
+    login_failed:      'Login failed — check credentials and try again',
   };
 
   // ----------------------------------------------------------------
@@ -343,14 +343,33 @@ const AccountsPage = (() => {
     try {
       _setStatus('🌐', 'Logging in via browser — this may take 15–30 seconds…');
       const result = await API.post('/api/accounts/setup', body);
-      _setStatus('✅', `Connected — @${result.username} is live on ${result.platform}`);
-      await new Promise(r => setTimeout(r, 1200));
-      Modal.close();
-      Toast.success(`@${result.username} (${result.platform}) connected`);
-      await reload();
+
+      if (result.ok) {
+        _setStatus('✅', `Connected — @${result.username} is live on ${result.platform}`);
+        await new Promise(r => setTimeout(r, 1000));
+        Modal.close();
+        Toast.success(`@${result.username} (${result.platform}) connected`);
+        await reload();
+      } else {
+        // Login failed — account exists in DB, we have result.id
+        const isFbChallenge = result.error === 'challenge' &&
+          (result.platform === 'facebook' || loginMethod === 'facebook');
+
+        if (isFbChallenge) {
+          _setStatus('⚠️',
+            'Facebook blocked our server IP — this is normal for server-based tools.\n' +
+            'Your credentials were NOT rejected. Use Session Import below to connect.');
+          _showImportFallback(result.id, result.platform);
+        } else {
+          _setStatus('❌', CONNECT_ERRORS[result.error] ?? result.error);
+        }
+
+        btn.disabled = false;
+        btn.textContent = 'Retry →';
+      }
     } catch (err) {
-      const msg = CONNECT_ERRORS[err.message] ?? err.message;
-      _setStatus('❌', msg);
+      // Network / auth errors
+      _setStatus('❌', CONNECT_ERRORS[err.message] ?? err.message);
       btn.disabled = false;
       btn.textContent = 'Retry →';
     }
@@ -408,5 +427,57 @@ const AccountsPage = (() => {
     }
   }
 
-  return { render, reload, openConnect, _selectPlatform, _selectMethod, _submitConnect, remove, showHealth, showUsage };
+  // ----------------------------------------------------------------
+  // Session Import fallback (shown inline after Facebook challenge)
+  // ----------------------------------------------------------------
+
+  function _showImportFallback(accountId, platform) {
+    if (document.getElementById('session-import-fallback')) return; // already shown
+
+    const status = document.getElementById('connect-status');
+    if (!status) return;
+
+    const el = document.createElement('div');
+    el.id = 'session-import-fallback';
+    el.setAttribute('data-account-id', accountId);
+    el.setAttribute('data-platform', platform);
+    el.style.cssText = 'margin-top:.75rem;padding:1rem;background:var(--bg-2);border-radius:6px;border:1px solid var(--border)';
+    el.innerHTML = `
+      <div style="font-weight:600;margin-bottom:.5rem">Import Session from Browser</div>
+      <ol style="font-size:.85rem;line-height:1.9;padding-left:1.2rem;margin:.25rem 0 .75rem;color:var(--text-muted)">
+        <li>Install <strong style="color:var(--text)">Cookie Editor</strong> extension
+            (<a href="https://cookie-editor.com" target="_blank" style="color:var(--accent)">chrome / firefox</a>)</li>
+        <li>Open <strong style="color:var(--text)">facebook.com</strong> in your normal browser and log in</li>
+        <li>Click Cookie Editor icon → <strong style="color:var(--text)">Export as JSON</strong></li>
+        <li>Paste the result here:</li>
+      </ol>
+      <textarea id="import-cookies-input" rows="5"
+        style="width:100%;font-family:monospace;font-size:.75rem;resize:vertical;margin-bottom:.6rem;box-sizing:border-box"
+        placeholder='[{"name":"c_user","value":"...","domain":".facebook.com",...}]'></textarea>
+      <button class="btn btn-primary btn-sm"
+        onclick="AccountsPage._submitImport()">Import Session</button>`;
+
+    status.insertAdjacentElement('afterend', el);
+  }
+
+  async function _submitImport() {
+    const el        = document.getElementById('session-import-fallback');
+    const accountId = el?.getAttribute('data-account-id');
+    const platform  = el?.getAttribute('data-platform');
+    const raw       = document.getElementById('import-cookies-input')?.value.trim();
+
+    if (!raw)       return Toast.error('Paste the cookie JSON first');
+    if (!accountId) return Toast.error('Account ID missing — retry Connect first');
+
+    try {
+      await API.post(`/api/accounts/${accountId}/import-session`, { cookies_json: raw });
+      Modal.close();
+      Toast.success(`Session imported for ${platform} account`);
+      await reload();
+    } catch (err) {
+      Toast.error(err.message);
+    }
+  }
+
+  return { render, reload, openConnect, _selectPlatform, _selectMethod, _submitConnect, _submitImport, remove, showHealth, showUsage };
 })();

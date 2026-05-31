@@ -242,20 +242,16 @@ router.post('/setup', async (req, res) => {
     const acc = am.getAccount(accountId);
     const result = await loginAndSaveSession(accountId, acc.platform);
 
-    if (!result.success) {
-      return res.status(400).json({
-        id: accountId,
-        ok: false,
-        error: result.event ?? result.reason ?? 'login_failed',
-      });
-    }
-
+    // Always return 200 so the frontend receives account id even on login failure
+    const freshAcc = am.getAccount(accountId);
     res.json({
-      id: accountId,
-      ok: true,
-      session_active: hasActiveSession(accountId, acc.platform),
-      username: acc.username,
-      platform: acc.platform,
+      id:             accountId,
+      ok:             result.success,
+      username:       freshAcc.username,
+      platform:       freshAcc.platform,
+      session_active: result.success ? hasActiveSession(accountId, freshAcc.platform) : false,
+      error:          result.success ? undefined : (result.event ?? result.reason ?? 'login_failed'),
+      detail:         result.message ?? undefined,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });

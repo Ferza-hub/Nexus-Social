@@ -61,9 +61,27 @@ async function checkForDetection(page) {
   const url  = page.url();
   const text = await page.evaluate(() => document.body?.innerText ?? '').catch(() => '');
 
-  if (url.includes('/checkpoint/') || text.includes('Your account has been locked')) return 'challenge';
+  // IP-based or device-based challenge (most common from VPS)
+  if (
+    url.includes('/checkpoint/') ||
+    url.includes('/login/device-based/') ||
+    url.includes('/two_step_verification/') ||
+    url.includes('/security/') ||
+    url.includes('/challenge/')
+  ) return 'challenge';
+
+  if (
+    text.includes('Your account has been locked') ||
+    text.includes('Enter the code we sent') ||
+    text.includes('Check your email') ||
+    text.includes('verify your identity') ||
+    text.includes('Confirm your identity') ||
+    text.includes('We detected an unusual login')
+  ) return 'challenge';
+
   if (text.includes('Your account has been disabled') || text.includes('permanently disabled')) return 'disabled';
   if (text.includes('temporarily blocked') || text.includes("You're Temporarily Blocked")) return 'action_block';
+
   if (url.includes('/login') && (text.includes('incorrect') || text.includes("password you entered"))) {
     return 'login_required';
   }
@@ -77,28 +95,53 @@ async function checkForDetection(page) {
 async function login(page, account) {
   log.info('Logging in', { username: account.email ?? account.username });
 
-  await page.goto(BASE_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
+  // Go directly to login page — avoids homepage overlay/redirect noise
+  await page.goto(`${BASE_URL}/login`, { waitUntil: 'domcontentloaded', timeout: 30000 });
   await h.waitForLoad(page);
-  await h.preAction();
 
-  // Dismiss cookie consent
-  const cookieBtn = page.locator(SEL.cookie_decline + ', ' + SEL.cookie_accept).first();
-  if (await cookieBtn.count() > 0) {
-    await cookieBtn.click();
-    await h.shortPause();
+  // Cookie consent — Facebook uses many different UIs across regions; try each in sequence
+  const COOKIE_BTNS = [
+    'button[data-cookiebanner="accept_button"]',
+    'button[data-cookiebanner="accept_only_essential_button"]',
+    '[aria-label="Allow all cookies"]',
+    'button:has-text("Accept All")',
+    'button:has-text("Allow all cookies")',
+    'button:has-text("Accept")',
+    'button:has-text("Only allow essential cookies")',
+  ];
+  for (const sel of COOKIE_BTNS) {
+    const btn = page.locator(sel).first();
+    if (await btn.count() > 0) {
+      await btn.click().catch(() => {});
+      await h.shortPause();
+      break;
+    }
   }
 
-  await h.humanType(page, SEL.email_input, account.email ?? account.username);
+  // Wait for login form — if not visible, Facebook has already blocked the IP
+  const emailField = page.locator('input[name="email"]').first();
+  const formVisible = await emailField.waitFor({ state: 'visible', timeout: 10000 }).then(() => true).catch(() => false);
+  if (!formVisible) {
+    const detection = await checkForDetection(page);
+    if (detection) return { success: false, event: detection };
+    log.warn('Login form not found — likely IP-based challenge', { username: account.email ?? account.username });
+    return { success: false, event: 'challenge', message: 'ip_blocked' };
+  }
+
+  await h.preAction();
+  await h.humanType(page, 'input[name="email"]', account.email ?? account.username);
   await h.delay(h.randInt(400, 900));
-  await h.humanType(page, SEL.password_input, account.password);
+  await h.humanType(page, 'input[id="pass"], input[name="pass"]', account.password);
   await h.delay(h.randInt(600, 1200));
-  await h.humanClick(page, SEL.login_button);
-  await h.waitForLoad(page, 20000);
+
+  const loginBtn = page.locator('button[name="login"], [data-testid="royal_login_button"], button[type="submit"]').first();
+  if (await loginBtn.count() > 0) await loginBtn.click();
+  else await page.keyboard.press('Enter');
+  await h.waitForLoad(page, 25000);
 
   const detection = await checkForDetection(page);
   if (detection) return { success: false, event: detection };
 
-  // Verify logged in: feed or home page should load
   const currentUrl = page.url();
   if (currentUrl.includes('/login') || currentUrl.includes('login.php')) {
     return { success: false, event: 'login_required' };
