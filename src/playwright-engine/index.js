@@ -426,6 +426,27 @@ async function executeAnonymousView(platform, url) {
 function _randInt(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
 function _delay(ms) { return new Promise(r => setTimeout(r, ms)); }
 
+const _YT_SEARCH_TERMS = [
+  'funny moments compilation', 'best music mix 2024', 'travel documentary',
+  'cooking recipe easy', 'workout at home', 'tech news today',
+  'movie review', 'nature sounds relaxing', 'street food tour',
+  'gaming highlights', 'diy project', 'science explained',
+];
+
+async function _naturalMouseMove(page, steps = 4) {
+  try {
+    const vp = page.viewportSize() ?? { width: 1366, height: 768 };
+    for (let i = 0; i < steps; i++) {
+      await page.mouse.move(
+        _randInt(80, vp.width  - 80),
+        _randInt(80, vp.height - 80),
+        { steps: _randInt(8, 25) }
+      );
+      await _delay(_randInt(150, 500));
+    }
+  } catch (_) {}
+}
+
 function _extractYouTubeId(url) {
   try {
     const u = new URL(url);
@@ -437,52 +458,90 @@ function _extractYouTubeId(url) {
 }
 
 async function _youtubeGhostView(page, url) {
-  const videoId = _extractYouTubeId(url);
+  const videoId    = _extractYouTubeId(url);
+  const isShorts   = url.includes('/shorts/');
+  const searchTerm = _YT_SEARCH_TERMS[_randInt(0, _YT_SEARCH_TERMS.length - 1)];
 
-  // Land on YouTube homepage (ghost has cookies — looks like returning visitor)
+  // ── Step 1: YouTube homepage (ghost has cookies → returning visitor) ──
   await page.goto('https://www.youtube.com/', {
     waitUntil: 'domcontentloaded', timeout: 45_000,
   });
-  await _delay(_randInt(1500, 3000));
+  await _delay(_randInt(1800, 3500));
+
+  // Natural mouse idle on homepage
+  await _naturalMouseMove(page, _randInt(2, 4));
 
   // Dismiss any popup
   for (const sel of _DISMISS_SELECTORS.youtube) {
     try {
       const el = await page.$(sel);
-      if (el) { await el.click(); await _delay(600); }
+      if (el) { await el.click(); await _delay(700); }
     } catch (_) {}
   }
 
-  // Search for video ID (natural: user searches, not pastes URL)
-  let navigated = false;
+  // ── Step 2: Search a natural term (not the video ID) ─────────────────
+  try {
+    const searchBox = await page.$('input[name="search_query"]');
+    if (searchBox) {
+      // Move mouse to search box naturally
+      const box = await searchBox.boundingBox();
+      if (box) {
+        await page.mouse.move(
+          box.x + box.width / 2 + _randInt(-10, 10),
+          box.y + box.height / 2 + _randInt(-3, 3),
+          { steps: _randInt(10, 20) }
+        );
+        await _delay(_randInt(200, 500));
+      }
+      await searchBox.click();
+      await _delay(_randInt(400, 900));
+
+      for (const ch of searchTerm) {
+        await page.keyboard.type(ch);
+        await _delay(_randInt(50, 160));
+      }
+      await _delay(_randInt(400, 800));
+      await page.keyboard.press('Enter');
+      await _delay(_randInt(2500, 4500));
+
+      // Natural mouse movement over results
+      await _naturalMouseMove(page, _randInt(2, 3));
+      await page.mouse.wheel(0, _randInt(150, 350));
+      await _delay(_randInt(1000, 2000));
+    }
+  } catch (_) {}
+
+  // ── Step 3: Navigate to target video ─────────────────────────────────
+  // Referrer is now the search results page — looks organic
+  const targetUrl = _cleanYoutubeUrl(url);
+  let navigated   = false;
+
   if (videoId) {
     try {
-      await page.click('input[name="search_query"]', { timeout: 5000 });
-      await _delay(_randInt(400, 900));
-      for (const ch of videoId) {
-        await page.keyboard.type(ch);
-        await _delay(_randInt(40, 120));
-      }
-      await page.keyboard.press('Enter');
-      await _delay(_randInt(2000, 4000));
-
-      // Click matching result in search page
       const link = await page.$(`a[href*="${videoId}"]`);
       if (link) {
+        const box = await link.boundingBox();
+        if (box) {
+          await page.mouse.move(
+            box.x + _randInt(5, box.width - 5),
+            box.y + _randInt(3, box.height - 3),
+            { steps: _randInt(8, 18) }
+          );
+          await _delay(_randInt(150, 400));
+        }
         await link.click();
         navigated = true;
-        await _delay(_randInt(2000, 4000));
+        await _delay(_randInt(2500, 4500));
       }
     } catch (_) {}
   }
 
   if (!navigated) {
-    // Fallback: direct navigation (still better than fresh anonymous because we have cookies)
-    await page.goto(_cleanYoutubeUrl(url), { waitUntil: 'domcontentloaded', timeout: 45_000 });
+    await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 45_000 });
     await _delay(_randInt(2000, 3500));
   }
 
-  // Dismiss sign-in prompts that may appear after landing on video
+  // ── Step 4: Dismiss any post-navigation popups ────────────────────────
   for (const sel of _DISMISS_SELECTORS.youtube) {
     try {
       const el = await page.$(sel);
@@ -490,24 +549,33 @@ async function _youtubeGhostView(page, url) {
     } catch (_) {}
   }
 
-  // Ensure video plays
+  // ── Step 5: Ensure video plays ────────────────────────────────────────
   try {
     await page.waitForSelector('video', { timeout: 8000 });
     const isPaused = await page.evaluate(() => document.querySelector('video')?.paused ?? true);
-    if (isPaused) await page.click('#movie_player, video').catch(() => {});
+    if (isPaused) {
+      const player = await page.$('#movie_player, .html5-video-player');
+      if (player) {
+        const box = await player.boundingBox();
+        if (box) await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+      }
+    }
   } catch (_) {}
 
-  // Natural interaction while watching
-  const isShorts = url.includes('/shorts/');
-  const watchMs  = isShorts ? _randInt(8_000, 20_000) : _randInt(20_000, 45_000);
-  const midPoint = Math.floor(watchMs / 2);
+  // ── Step 6: Watch with natural micro-interactions ─────────────────────
+  const watchMs  = isShorts ? _randInt(8_000, 18_000) : _randInt(22_000, 48_000);
+  const quarter  = Math.floor(watchMs / 4);
 
-  await _delay(midPoint);
-  // Micro-scroll (human restlessness)
-  await page.mouse.wheel(0, _randInt(30, 100)).catch(() => {});
-  await _delay(_randInt(500, 1500));
-  await page.mouse.wheel(0, -_randInt(20, 60)).catch(() => {});
-  await _delay(watchMs - midPoint);
+  await _delay(quarter);
+  await _naturalMouseMove(page, 2);
+  await _delay(quarter);
+  // Mid-video scroll (reading description / comments area)
+  await page.mouse.wheel(0, _randInt(80, 200)).catch(() => {});
+  await _delay(_randInt(800, 1800));
+  await page.mouse.wheel(0, -_randInt(40, 100)).catch(() => {});
+  await _delay(quarter);
+  await _naturalMouseMove(page, 2);
+  await _delay(quarter);
 }
 
 async function executeGhostView(platform, url) {

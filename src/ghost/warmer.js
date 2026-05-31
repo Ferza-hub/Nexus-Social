@@ -10,6 +10,20 @@ function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
 function randInt(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
 function pick(arr)  { return arr[Math.floor(Math.random() * arr.length)]; }
 
+async function _mouseWander(page, steps = 3) {
+  try {
+    const vp = page.viewportSize() ?? { width: 1366, height: 768 };
+    for (let i = 0; i < steps; i++) {
+      await page.mouse.move(
+        randInt(80, vp.width - 80),
+        randInt(80, vp.height - 80),
+        { steps: randInt(8, 20) }
+      );
+      await delay(randInt(200, 600));
+    }
+  } catch (_) {}
+}
+
 // Innocuous YouTube search terms used during warmup
 const WARMUP_SEARCHES = [
   'funny cats', 'cooking tutorial', 'travel vlog 2024',
@@ -59,11 +73,13 @@ async function warmupGhost(ghostId) {
     }
 
     // ── Step 2: Browse trending / homepage ──────────────────────────
-    await delay(randInt(3000, 6000));
-    for (let i = 0; i < randInt(1, 3); i++) {
+    await delay(randInt(2000, 4000));
+    await _mouseWander(page, randInt(3, 5));
+    for (let i = 0; i < randInt(2, 4); i++) {
       await page.mouse.wheel(0, randInt(120, 400));
-      await delay(randInt(800, 1800));
+      await delay(randInt(700, 1500));
     }
+    await _mouseWander(page, 2);
 
     // ── Step 3: Watch one random trending video ─────────────────────
     try {
@@ -126,10 +142,10 @@ async function warmupGhost(ghostId) {
 
 const _warmupQueue = new Set();
 
-async function warmupBatch(count = 5) {
-  const cold = getDb().prepare(
-    `SELECT id FROM ghost_profiles WHERE status='cold' LIMIT ?`
-  ).all(count);
+async function warmupBatch(count = 0) {
+  const cold = count > 0
+    ? getDb().prepare(`SELECT id FROM ghost_profiles WHERE status='cold' LIMIT ?`).all(count)
+    : getDb().prepare(`SELECT id FROM ghost_profiles WHERE status='cold'`).all();
 
   log.info('Warmup batch started', { requested: count, found: cold.length });
 

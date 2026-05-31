@@ -85,11 +85,33 @@ function randInt(min, max) {
 }
 
 // ----------------------------------------------------------------
-// Build the fingerprint init script injected via addInitScript
-// Inherited from nexus-playwright pattern
+// Fingerprint helpers
 // ----------------------------------------------------------------
 
-function buildFingerprintScript(seed, viewport, ua, gpuPair) {
+function _platformFromUA(ua) {
+  if (/Macintosh/.test(ua)) return 'MacIntel';
+  if (/Linux/.test(ua))     return 'Linux x86_64';
+  return 'Win32';
+}
+
+function _languagesFromLocale(locale) {
+  const base = locale.split('-')[0];
+  if (base === 'en') return [locale, 'en'];
+  return [locale, base, 'en-US', 'en'];
+}
+
+// ----------------------------------------------------------------
+// Build the fingerprint init script injected via addInitScript
+// opts (for ghost): { locale, hardwareConcurrency, deviceMemory }
+// ----------------------------------------------------------------
+
+function buildFingerprintScript(seed, viewport, ua, gpuPair, opts = {}) {
+  const platform  = _platformFromUA(ua);
+  const locale    = opts.locale ?? 'en-US';
+  const languages = _languagesFromLocale(locale);
+  const hwConc    = opts.hardwareConcurrency ?? randInt(4, 16);
+  const devMem    = opts.deviceMemory        ?? pick([4, 8, 16]);
+
   return `
 (function() {
   const _seed = ${seed};
@@ -101,14 +123,14 @@ function buildFingerprintScript(seed, viewport, ua, gpuPair) {
     return _s / 4294967296;
   }
 
-  // 1. Navigator — disable automation flags
-  Object.defineProperty(navigator, 'webdriver', { get: () => undefined, configurable: true });
-  Object.defineProperty(navigator, 'languages',          { get: () => ['en-US', 'en'] });
-  Object.defineProperty(navigator, 'platform',           { get: () => 'Win32' });
-  Object.defineProperty(navigator, 'vendor',             { get: () => 'Google Inc.' });
-  Object.defineProperty(navigator, 'hardwareConcurrency',{ get: () => ${randInt(4, 16)} });
-  Object.defineProperty(navigator, 'deviceMemory',       { get: () => ${pick([4, 8, 16])} });
-  Object.defineProperty(navigator, 'maxTouchPoints',     { get: () => 0 });
+  // 1. Navigator — disable automation flags + consistent identity
+  Object.defineProperty(navigator, 'webdriver',           { get: () => undefined, configurable: true });
+  Object.defineProperty(navigator, 'languages',           { get: () => ${JSON.stringify(languages)} });
+  Object.defineProperty(navigator, 'platform',            { get: () => '${platform}' });
+  Object.defineProperty(navigator, 'vendor',              { get: () => 'Google Inc.' });
+  Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => ${hwConc} });
+  Object.defineProperty(navigator, 'deviceMemory',        { get: () => ${devMem} });
+  Object.defineProperty(navigator, 'maxTouchPoints',      { get: () => 0 });
 
   // 2. Plugins (PDF viewer mocks)
   const _plugins = [
@@ -119,10 +141,10 @@ function buildFingerprintScript(seed, viewport, ua, gpuPair) {
   _plugins.item      = i => _plugins[i];
   _plugins.namedItem = n => _plugins.find(p => p.name === n) || null;
   _plugins.refresh   = () => {};
-  Object.defineProperty(navigator, 'plugins', { get: () => _plugins });
+  Object.defineProperty(navigator, 'plugins',   { get: () => _plugins });
   Object.defineProperty(navigator, 'mimeTypes', { get: () => ({ length: 2, item: () => null, namedItem: () => null }) });
 
-  // 3. window.chrome (simulate real Chrome environment)
+  // 3. window.chrome
   if (!window.chrome) {
     Object.defineProperty(window, 'chrome', {
       value: {
@@ -132,35 +154,27 @@ function buildFingerprintScript(seed, viewport, ua, gpuPair) {
           RunningState: { CANNOT_RUN: 'cannot_run', READY_TO_RUN: 'ready_to_run', RUNNING: 'running' }
         },
         runtime: {
-          connect: () => {},
-          sendMessage: () => {},
-          PlatformOs: { MAC: 'mac', WIN: 'win', ANDROID: 'android', CROS: 'cros', LINUX: 'linux' },
+          connect: () => {}, sendMessage: () => {},
+          PlatformOs:   { MAC: 'mac', WIN: 'win', ANDROID: 'android', CROS: 'cros', LINUX: 'linux' },
           PlatformArch: { ARM: 'arm', X86_32: 'x86-32', X86_64: 'x86-64' },
           id: undefined,
         },
         csi: () => {},
         loadTimes: () => ({
           commitLoadTime: Date.now() / 1000 - _rand() * 2,
-          connectionInfo: 'h2',
-          finishDocumentLoadTime: 0,
-          finishLoadTime: 0,
-          firstPaintAfterLoadTime: 0,
-          firstPaintTime: 0,
-          navigationType: 'Other',
+          connectionInfo: 'h2', finishDocumentLoadTime: 0, finishLoadTime: 0,
+          firstPaintAfterLoadTime: 0, firstPaintTime: 0, navigationType: 'Other',
           npnNegotiatedProtocol: 'h2',
           requestTime: Date.now() / 1000 - _rand() * 3,
           startLoadTime: Date.now() / 1000 - _rand() * 2.5,
-          wasAlternateProtocolAvailable: false,
-          wasFetchedViaSpdy: true,
-          wasNpnNegotiated: true,
+          wasAlternateProtocolAvailable: false, wasFetchedViaSpdy: true, wasNpnNegotiated: true,
         }),
       },
-      writable: false,
-      configurable: false,
+      writable: false, configurable: false,
     });
   }
 
-  // 4. Canvas — per-session imperceptible noise
+  // 4. Canvas noise
   const _origToDataURL = HTMLCanvasElement.prototype.toDataURL;
   HTMLCanvasElement.prototype.toDataURL = function(type) {
     const ctx = this.getContext('2d');
@@ -176,7 +190,6 @@ function buildFingerprintScript(seed, viewport, ua, gpuPair) {
     }
     return _origToDataURL.apply(this, arguments);
   };
-
   const _origGetImageData = CanvasRenderingContext2D.prototype.getImageData;
   CanvasRenderingContext2D.prototype.getImageData = function(sx, sy, sw, sh) {
     const data = _origGetImageData.apply(this, arguments);
@@ -186,80 +199,111 @@ function buildFingerprintScript(seed, viewport, ua, gpuPair) {
     return data;
   };
 
-  // 5. WebGL — realistic GPU vendor/renderer
+  // 5. WebGL GPU
   const _gpuVendor   = '${gpuPair[0]}';
   const _gpuRenderer = '${gpuPair[1]}';
-
-  const _patchWebGL = (ctx) => {
+  const _patchWebGL  = (ctx) => {
     if (!ctx) return;
-    const _origGP = ctx.getParameter.bind(ctx);
-    ctx.getParameter = function(param) {
-      if (param === 37445) return _gpuVendor;   // UNMASKED_VENDOR_WEBGL
-      if (param === 37446) return _gpuRenderer; // UNMASKED_RENDERER_WEBGL
-      return _origGP(param);
+    const _orig = ctx.getParameter.bind(ctx);
+    ctx.getParameter = function(p) {
+      if (p === 37445) return _gpuVendor;
+      if (p === 37446) return _gpuRenderer;
+      return _orig(p);
     };
   };
-
   const _origGetCtx = HTMLCanvasElement.prototype.getContext;
   HTMLCanvasElement.prototype.getContext = function(type) {
     const ctx = _origGetCtx.apply(this, arguments);
-    if (type === 'webgl' || type === 'experimental-webgl' || type === 'webgl2') {
-      _patchWebGL(ctx);
-    }
+    if (type === 'webgl' || type === 'experimental-webgl' || type === 'webgl2') _patchWebGL(ctx);
     return ctx;
   };
 
-  // 6. Audio context — negligible float noise
+  // 6. Audio context noise
   try {
-    const _origGetChannelData = AudioBuffer.prototype.getChannelData;
+    const _origGCD = AudioBuffer.prototype.getChannelData;
     AudioBuffer.prototype.getChannelData = function() {
-      const data = _origGetChannelData.apply(this, arguments);
-      for (let i = 0; i < Math.min(data.length, 50); i++) {
-        data[i] += (_rand() - 0.5) * 5e-8;
-      }
+      const data = _origGCD.apply(this, arguments);
+      for (let i = 0; i < Math.min(data.length, 50); i++) data[i] += (_rand() - 0.5) * 5e-8;
       return data;
     };
   } catch(_) {}
 
-  // 7. Battery API mock
+  // 7. Battery
   try {
     Object.defineProperty(navigator, 'getBattery', {
       value: () => Promise.resolve({
-        charging: _rand() > 0.25,
-        chargingTime: 0,
+        charging: _rand() > 0.25, chargingTime: 0,
         dischargingTime: Math.floor(4000 + _rand() * 14400),
         level: 0.3 + _rand() * 0.7,
-        addEventListener: () => {},
-        removeEventListener: () => {},
+        addEventListener: () => {}, removeEventListener: () => {},
       }),
-      writable: false,
-      configurable: false,
+      writable: false, configurable: false,
     });
   } catch(_) {}
 
   // 8. Network info
   try {
-    const _conn = {
-      downlink: 10 + _rand() * 90,
-      effectiveType: '4g',
-      rtt: Math.floor(10 + _rand() * 40),
-      saveData: false,
-      type: 'wifi',
+    Object.defineProperty(navigator, 'connection', { get: () => ({
+      downlink: 10 + _rand() * 90, effectiveType: '4g',
+      rtt: Math.floor(10 + _rand() * 40), saveData: false, type: 'wifi',
       addEventListener: () => {},
-    };
-    Object.defineProperty(navigator, 'connection', { get: () => _conn });
+    })});
   } catch(_) {}
 
-  // 9. Permissions — return 'prompt' for sensitive APIs
+  // 9. Permissions
   try {
-    const _origQuery = Permissions.prototype.query;
+    const _origQ = Permissions.prototype.query;
     Permissions.prototype.query = function(desc) {
-      const sensitive = ['notifications','push','midi','camera','microphone','speaker','device-info','background-sync','bluetooth','persistent-storage','ambient-light-sensor','accelerometer','gyroscope','magnetometer','clipboard-read','clipboard-write'];
-      if (sensitive.includes(desc.name)) {
+      const sensitive = ['notifications','push','midi','camera','microphone','speaker','device-info',
+        'background-sync','bluetooth','persistent-storage','ambient-light-sensor',
+        'accelerometer','gyroscope','magnetometer','clipboard-read','clipboard-write'];
+      if (sensitive.includes(desc.name))
         return Promise.resolve({ state: 'prompt', onchange: null, addEventListener: () => {} });
-      }
-      return _origQuery.call(this, desc);
+      return _origQ.call(this, desc);
     };
+  } catch(_) {}
+
+  // 10. Screen dimensions — match viewport exactly
+  try {
+    Object.defineProperty(screen, 'width',       { get: () => ${viewport.width}  });
+    Object.defineProperty(screen, 'height',      { get: () => ${viewport.height} });
+    Object.defineProperty(screen, 'availWidth',  { get: () => ${viewport.width}  });
+    Object.defineProperty(screen, 'availHeight', { get: () => ${viewport.height - 40} });
+    Object.defineProperty(screen, 'colorDepth',  { get: () => 24 });
+    Object.defineProperty(screen, 'pixelDepth',  { get: () => 24 });
+    Object.defineProperty(window, 'outerWidth',  { get: () => ${viewport.width}  });
+    Object.defineProperty(window, 'outerHeight', { get: () => ${viewport.height} });
+  } catch(_) {}
+
+  // 11. Document visibility — headless returns 'hidden' by default
+  try {
+    Object.defineProperty(document, 'hasFocus',        { value: () => true });
+    Object.defineProperty(document, 'hidden',          { get: () => false });
+    Object.defineProperty(document, 'visibilityState', { get: () => 'visible' });
+    document.dispatchEvent(new Event('visibilitychange'));
+  } catch(_) {}
+
+  // 12. WebRTC — strip STUN servers to prevent IP leak via ICE candidates
+  try {
+    const _Orig = window.RTCPeerConnection;
+    if (_Orig) {
+      window.RTCPeerConnection = function(cfg) {
+        return new _Orig(Object.assign({}, cfg, { iceServers: [] }));
+      };
+      window.RTCPeerConnection.prototype     = _Orig.prototype;
+      window.webkitRTCPeerConnection         = window.RTCPeerConnection;
+    }
+  } catch(_) {}
+
+  // 13. Media devices — mock basic laptop devices (no label = permission not granted)
+  try {
+    if (navigator.mediaDevices) {
+      navigator.mediaDevices.enumerateDevices = () => Promise.resolve([
+        { deviceId: '', groupId: 'grp1', kind: 'audioinput',  label: '' },
+        { deviceId: '', groupId: 'grp1', kind: 'audiooutput', label: '' },
+        { deviceId: '', groupId: 'grp2', kind: 'videoinput',  label: '' },
+      ]);
+    }
   } catch(_) {}
 
 })();
@@ -506,7 +550,11 @@ async function launchWithGhost(ghostId) {
   if (storageState) ctxOpts.storageState = storageState;
 
   const context = await browser.newContext(ctxOpts);
-  await context.addInitScript(buildFingerprintScript(fp.canvasSeed, fp.viewport, fp.userAgent, gpuPair));
+  await context.addInitScript(buildFingerprintScript(fp.canvasSeed, fp.viewport, fp.userAgent, gpuPair, {
+    locale:              fp.locale,
+    hardwareConcurrency: fp.hardwareConcurrency,
+    deviceMemory:        fp.deviceMemory,
+  }));
   const page = await context.newPage();
 
   markBusy(slotId);

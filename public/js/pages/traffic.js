@@ -684,7 +684,7 @@ const TrafficPage = (() => {
 
   async function _warmupGhosts() {
     try {
-      const data = await API.post('/api/ghosts/warmup', { count: 5 });
+      const data = await API.post('/api/ghosts/warmup', { count: 0 }); // 0 = all cold
       Toast.success(data.message);
       // Poll stats to show warming progress
       const poll = setInterval(async () => {

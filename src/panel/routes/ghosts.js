@@ -30,14 +30,18 @@ router.post('/', (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// POST /api/ghosts/warmup — warmup batch of cold ghosts (async)
+// POST /api/ghosts/warmup — warmup cold ghosts (async, no cap)
 router.post('/warmup', (req, res) => {
   try {
-    const count = Math.min(Number(req.body.count ?? 5), 20);
+    // count=0 or omitted → warm ALL cold ghosts
+    const count = Number(req.body.count ?? 0);
     warmer.warmupBatch(count).catch(err =>
       console.error('[GhostWarmer] batch error:', err.message)
     );
-    res.json({ ok: true, message: `Warming up to ${count} ghosts in background` });
+    const msg = count > 0
+      ? `Warming up to ${count} cold ghosts in background`
+      : 'Warming up all cold ghosts in background';
+    res.json({ ok: true, message: msg });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
