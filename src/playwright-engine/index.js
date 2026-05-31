@@ -338,8 +338,8 @@ async function executeAnonymousView(platform, url) {
 
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000, referer });
 
-    // Small wait for popups to appear, then dismiss
-    await new Promise(r => setTimeout(r, 2000));
+    // Small wait for popups, then dismiss
+    await new Promise(r => setTimeout(r, 1500));
     for (const sel of (_DISMISS_SELECTORS[platform] ?? [])) {
       try {
         const el = await page.$(sel);
@@ -347,14 +347,14 @@ async function executeAnonymousView(platform, url) {
       } catch (_) {}
     }
 
-    // Natural scroll — simulate reading/watching
-    const scrolls = Math.floor(Math.random() * 4) + 1;
+    // Natural scroll while "watching"
+    const scrolls = Math.floor(Math.random() * 3) + 1;
     for (let i = 0; i < scrolls; i++) {
-      await page.mouse.wheel(0, Math.floor(Math.random() * 150 + 50));
-      await new Promise(r => setTimeout(r, Math.floor(Math.random() * 2000 + 500)));
+      await page.mouse.wheel(0, Math.floor(Math.random() * 120 + 40));
+      await new Promise(r => setTimeout(r, Math.floor(Math.random() * 1000 + 300)));
     }
 
-    const watchMs = Math.floor(Math.random() * 17000 + 8000); // 8–25s
+    const watchMs = Math.floor(Math.random() * 7000 + 3000); // 3–10s
     await new Promise(r => setTimeout(r, watchMs));
 
     log.info('Anonymous view completed', { platform, watchMs });

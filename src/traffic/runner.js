@@ -108,42 +108,64 @@ async function runJob(jobId) {
 
     // ----------------------------------------------------------------
     // Anonymous path — views with no account required
+    // Runs MAX_CONCURRENT_BROWSERS workers simultaneously so N browsers
+    // are always active at once instead of waiting one-by-one.
     // ----------------------------------------------------------------
     if (actionDef.canAnon) {
-      log.info('Job started (anonymous)', { jobId, platform: job.platform, target: targetValue, total: job.target_count });
+      const CONCURRENT = Math.min(
+        parseInt(process.env.MAX_CONCURRENT_BROWSERS ?? '4', 10),
+        job.target_count
+      );
+
+      log.info('Job started (anonymous)', {
+        jobId, platform: job.platform, target: targetValue,
+        total: job.target_count, concurrent: CONCURRENT,
+      });
 
       let consecutiveFails = 0;
+      let aborted = false;
       const MAX_CONSEC_FAILS = 10;
 
-      while (completed < job.target_count && !stopped) {
-        const result = await executeAnonymousView(job.platform, targetValue);
-
-        const logStatus = result.success ? 'success' : 'failed';
+      const logView = (status, reason) =>
         db.prepare(
           'INSERT INTO traffic_logs (job_id, account_id, platform, action, status, message, created_at) VALUES (?,?,?,?,?,?,?)'
-        ).run(jobId, 0, job.platform, actionDef.action, logStatus,
-              result.reason ?? null, new Date().toISOString());
+        ).run(jobId, 0, job.platform, actionDef.action, status, reason ?? null, new Date().toISOString());
 
-        if (result.success) {
-          completed++;
-          consecutiveFails = 0;
-          db.prepare('UPDATE traffic_jobs SET completed_count=?, updated_at=? WHERE id=?')
-            .run(completed, new Date().toISOString(), jobId);
-          log.debug('Anonymous view done', { jobId, completed, total: job.target_count });
-        } else {
-          consecutiveFails++;
-          log.warn('Anonymous view failed', { jobId, consecutiveFails, reason: result.reason });
-          if (consecutiveFails >= MAX_CONSEC_FAILS) {
-            log.error('Too many consecutive failures — aborting job', { jobId, platform: job.platform });
-            db.prepare("UPDATE traffic_jobs SET status='failed', updated_at=? WHERE id=?")
-              .run(new Date().toISOString(), jobId);
-            return;
+      const worker = async () => {
+        while (completed < job.target_count && !stopped && !aborted) {
+          const result = await executeAnonymousView(job.platform, targetValue);
+          logView(result.success ? 'success' : 'failed', result.reason);
+
+          if (result.success) {
+            completed++;
+            consecutiveFails = 0;
+            db.prepare('UPDATE traffic_jobs SET completed_count=?, updated_at=? WHERE id=?')
+              .run(completed, new Date().toISOString(), jobId);
+            log.debug('Anonymous view done', { jobId, completed, total: job.target_count });
+          } else {
+            consecutiveFails++;
+            log.warn('Anonymous view failed', { jobId, consecutiveFails, reason: result.reason });
+            if (consecutiveFails >= MAX_CONSEC_FAILS) {
+              log.error('Too many consecutive failures — aborting', { jobId, platform: job.platform });
+              aborted = true;
+              break;
+            }
+          }
+
+          // Brief gap before this worker picks up the next slot
+          if (!stopped && !aborted && completed < job.target_count) {
+            await delay(randInt(500, 2000));
           }
         }
+      };
 
-        if (!stopped && completed < job.target_count) {
-          await delay(randInt(1500, 4000));
-        }
+      // Launch all workers simultaneously — they share the completed counter
+      await Promise.all(Array.from({ length: CONCURRENT }, worker));
+
+      if (aborted) {
+        db.prepare("UPDATE traffic_jobs SET status='failed', updated_at=? WHERE id=?")
+          .run(new Date().toISOString(), jobId);
+        return;
       }
 
       const finalStatus = stopped ? 'paused' : 'completed';
