@@ -1,6 +1,6 @@
 'use strict';
 
-const { executeAction } = require('../playwright-engine/index');
+const { executeAction, executeAnonymousView } = require('../playwright-engine/index');
 const { getDb }         = require('../database/db');
 const { makeLogger }    = require('../utils/logger');
 
@@ -12,36 +12,37 @@ const _active = new Map();
 // ----------------------------------------------------------------
 // Action map: what Playwright action each traffic type maps to
 // canRepeat = same account can perform this action multiple times
+// canAnon   = can run without any logged-in account (anonymous browser)
 // ----------------------------------------------------------------
 
 const TRAFFIC_ACTIONS = {
   instagram: {
-    views:     { action: 'watch_reel',  paramKey: 'reelUrl',     canRepeat: true  },
-    likes:     { action: 'like_post',   paramKey: 'postUrl',     canRepeat: false },
-    followers: { action: 'follow',      paramKey: 'username',    canRepeat: false },
+    views:     { action: 'watch_reel',  paramKey: 'reelUrl',     canRepeat: true,  canAnon: true  },
+    likes:     { action: 'like_post',   paramKey: 'postUrl',     canRepeat: false, canAnon: false },
+    followers: { action: 'follow',      paramKey: 'username',    canRepeat: false, canAnon: false },
   },
   tiktok: {
-    views:     { action: 'watch_video', paramKey: 'videoUrl',    canRepeat: true  },
-    likes:     { action: 'like_video',  paramKey: 'videoUrl',    canRepeat: false },
-    followers: { action: 'follow',      paramKey: 'username',    canRepeat: false },
+    views:     { action: 'watch_video', paramKey: 'videoUrl',    canRepeat: true,  canAnon: true  },
+    likes:     { action: 'like_video',  paramKey: 'videoUrl',    canRepeat: false, canAnon: false },
+    followers: { action: 'follow',      paramKey: 'username',    canRepeat: false, canAnon: false },
   },
   twitter: {
-    likes:     { action: 'like_post',   paramKey: 'tweetUrl',    canRepeat: false },
-    followers: { action: 'follow',      paramKey: 'username',    canRepeat: false },
+    likes:     { action: 'like_post',   paramKey: 'tweetUrl',    canRepeat: false, canAnon: false },
+    followers: { action: 'follow',      paramKey: 'username',    canRepeat: false, canAnon: false },
   },
   youtube: {
-    views:     { action: 'watch_video', paramKey: 'videoUrl',    canRepeat: true  },
-    likes:     { action: 'like_video',  paramKey: 'videoUrl',    canRepeat: false },
-    followers: { action: 'subscribe',   paramKey: 'channelUrl',  canRepeat: false },
+    views:     { action: 'watch_video', paramKey: 'videoUrl',    canRepeat: true,  canAnon: true  },
+    likes:     { action: 'like_video',  paramKey: 'videoUrl',    canRepeat: false, canAnon: false },
+    followers: { action: 'subscribe',   paramKey: 'channelUrl',  canRepeat: false, canAnon: false },
   },
   facebook: {
-    views:     { action: 'watch_reel',  paramKey: 'reelUrl',     canRepeat: true  },
-    likes:     { action: 'like_post',   paramKey: 'postUrl',     canRepeat: false },
-    followers: { action: 'follow',      paramKey: 'profileUrl',  canRepeat: false },
+    views:     { action: 'watch_reel',  paramKey: 'reelUrl',     canRepeat: true,  canAnon: true  },
+    likes:     { action: 'like_post',   paramKey: 'postUrl',     canRepeat: false, canAnon: false },
+    followers: { action: 'follow',      paramKey: 'profileUrl',  canRepeat: false, canAnon: false },
   },
   threads: {
-    likes:     { action: 'like_post',   paramKey: 'postUrl',     canRepeat: false },
-    followers: { action: 'follow',      paramKey: 'username',    canRepeat: false },
+    likes:     { action: 'like_post',   paramKey: 'postUrl',     canRepeat: false, canAnon: false },
+    followers: { action: 'follow',      paramKey: 'username',    canRepeat: false, canAnon: false },
   },
 };
 
@@ -102,7 +103,48 @@ async function runJob(jobId) {
       return;
     }
 
-    // Get active accounts, randomly ordered so we don't always start with the same account
+    const targetValue = extractTarget(job.platform, job.action_type, job.target_value);
+    let completed = 0;
+
+    // ----------------------------------------------------------------
+    // Anonymous path — views with no account required
+    // ----------------------------------------------------------------
+    if (actionDef.canAnon) {
+      log.info('Job started (anonymous)', { jobId, platform: job.platform, target: targetValue, total: job.target_count });
+
+      while (completed < job.target_count && !stopped) {
+        const result = await executeAnonymousView(job.platform, targetValue);
+
+        const logStatus = result.success ? 'success' : 'failed';
+        db.prepare(
+          'INSERT INTO traffic_logs (job_id, account_id, platform, action, status, message, created_at) VALUES (?,?,?,?,?,?,?)'
+        ).run(jobId, 0, job.platform, actionDef.action, logStatus,
+              result.reason ?? null, new Date().toISOString());
+
+        if (result.success) {
+          completed++;
+          db.prepare('UPDATE traffic_jobs SET completed_count=?, updated_at=? WHERE id=?')
+            .run(completed, new Date().toISOString(), jobId);
+          log.debug('Anonymous view done', { jobId, completed, total: job.target_count });
+        }
+
+        // Short gap between browser launches
+        if (!stopped && completed < job.target_count) {
+          await delay(randInt(1500, 4000));
+        }
+      }
+
+      const finalStatus = stopped ? 'paused' : 'completed';
+      db.prepare('UPDATE traffic_jobs SET status=?, completed_at=?, updated_at=? WHERE id=?')
+        .run(finalStatus, new Date().toISOString(), new Date().toISOString(), jobId);
+
+      log.info('Job finished', { jobId, completed, finalStatus });
+      return;
+    }
+
+    // ----------------------------------------------------------------
+    // Account-based path — likes / followers
+    // ----------------------------------------------------------------
     const accounts = shuffle(
       db.prepare("SELECT * FROM accounts WHERE platform=? AND status='active'").all(job.platform)
     );
@@ -114,16 +156,12 @@ async function runJob(jobId) {
       return;
     }
 
-    const targetValue = extractTarget(job.platform, job.action_type, job.target_value);
     const params = { [actionDef.paramKey]: targetValue };
-
-    let completed = 0;
     let idx = 0;
 
     log.info('Job started', { jobId, platform: job.platform, action: actionDef.action, target: targetValue, total: job.target_count, accounts: accounts.length });
 
     while (completed < job.target_count && !stopped) {
-      // For non-repeatable actions, stop when all accounts exhausted
       if (!actionDef.canRepeat && idx >= accounts.length) {
         log.info('All accounts used for non-repeatable action', { jobId, completed });
         break;
@@ -151,10 +189,8 @@ async function runJob(jobId) {
         log.debug('Action skipped/failed', { jobId, accountId: account.id, reason: result.reason ?? result.message });
       }
 
-      // Natural inter-action pause — mimics human browsing patterns
       if (!stopped && completed < job.target_count) {
-        const pause = randInt(3000, 9000);
-        await delay(pause);
+        await delay(randInt(3000, 9000));
       }
     }
 

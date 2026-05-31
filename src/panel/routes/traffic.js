@@ -41,23 +41,27 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ error: 'platform, action_type, target_value required' });
     }
 
-    if (!TRAFFIC_ACTIONS[platform]?.[action_type]) {
+    const actionDef = TRAFFIC_ACTIONS[platform]?.[action_type];
+    if (!actionDef) {
       return res.status(400).json({ error: `"${action_type}" is not supported for ${platform}` });
     }
 
-    const db   = getDb();
-    const n    = Number(count);
+    const db = getDb();
+    const n  = Number(count);
     if (!n || n < 1) return res.status(400).json({ error: 'count must be ≥ 1' });
 
-    // Check active accounts exist
-    const avail = db.prepare(
-      "SELECT COUNT(*) AS n FROM accounts WHERE platform=? AND status='active'"
-    ).get(platform)?.n ?? 0;
+    // Account check only needed for non-anonymous actions
+    let avail = 0;
+    if (!actionDef.canAnon) {
+      avail = db.prepare(
+        "SELECT COUNT(*) AS n FROM accounts WHERE platform=? AND status='active'"
+      ).get(platform)?.n ?? 0;
 
-    if (avail === 0) {
-      return res.status(400).json({
-        error: `No active ${platform} accounts. Connect accounts first.`,
-      });
+      if (avail === 0) {
+        return res.status(400).json({
+          error: `No active ${platform} accounts. Connect accounts first.`,
+        });
+      }
     }
 
     const result = db.prepare(`
@@ -73,7 +77,7 @@ router.post('/', async (req, res) => {
       console.error('[TrafficRunner] unhandled:', err.message);
     });
 
-    res.json({ id: jobId, accounts_available: avail });
+    res.json({ id: jobId, accounts_available: avail, anonymous: actionDef.canAnon });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

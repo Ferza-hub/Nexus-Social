@@ -149,6 +149,7 @@ const TrafficPage = (() => {
     btn.className = 'btn btn-primary btn-sm';
     btn.style.gap = '.3rem';
     _refreshHint(action);
+    _refreshAvailability(_platform);
   }
 
   function _refreshActionGrid(platform) {
@@ -178,10 +179,23 @@ const TrafficPage = (() => {
     if (el) el.textContent = hint;
   }
 
+  const ANON_ACTIONS = new Set(['views']);
+
   async function _refreshAvailability(platform) {
+    const el = document.getElementById('tr-avail');
+
+    if (ANON_ACTIONS.has(_actionType)) {
+      if (el) {
+        el.textContent = 'Anonymous traffic';
+        el.style.color = 'var(--text-success, #22c55e)';
+      }
+      const warn = document.getElementById('tr-capacity-warn');
+      if (warn) warn.style.display = 'none';
+      return;
+    }
+
     try {
       const data = await API.get(`/api/traffic/accounts?platform=${platform}`);
-      const el   = document.getElementById('tr-avail');
       if (el) {
         el.textContent = data.count > 0
           ? `${data.count} account${data.count !== 1 ? 's' : ''} ready`
@@ -197,10 +211,13 @@ const TrafficPage = (() => {
     const warn  = document.getElementById('tr-capacity-warn');
     if (!warn) return;
 
-    const canRepeat  = ['views'].includes(_actionType);
-    const maxUnique  = accountCount;
+    if (ANON_ACTIONS.has(_actionType)) {
+      warn.style.display = 'none';
+      return;
+    }
 
-    if (!canRepeat && count > maxUnique && maxUnique > 0) {
+    const maxUnique = accountCount;
+    if (count > maxUnique && maxUnique > 0) {
       warn.style.display = 'block';
       warn.textContent   =
         `⚠ You have ${maxUnique} account${maxUnique !== 1 ? 's' : ''} — ` +
@@ -234,7 +251,9 @@ const TrafficPage = (() => {
         count,
       });
 
-      Toast.success(`Job #${result.id} started — ${result.accounts_available} accounts working`);
+      Toast.success(result.anonymous
+        ? `Job #${result.id} started — anonymous traffic running`
+        : `Job #${result.id} started — ${result.accounts_available} accounts working`);
       _activeId = result.id;
       _startPoll(result.id);
       document.getElementById('tr-target').value = '';
@@ -320,7 +339,7 @@ const TrafficPage = (() => {
                 <span style="color:${l.status === 'success' ? '#22c55e' : '#f59e0b'}">
                   ${l.status === 'success' ? '✓' : '↷'}
                 </span>
-                <span>@${l.username ?? l.account_id}</span>
+                <span>${l.account_id === 0 ? 'anonymous' : '@' + (l.username ?? l.account_id)}</span>
                 <span style="margin-left:auto">${l.status}</span>
               </div>`).join('')}
           </div>` : ''}

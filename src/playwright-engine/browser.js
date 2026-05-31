@@ -342,4 +342,56 @@ async function launchForAccount(accountId, platform) {
   };
 }
 
-module.exports = { launchForAccount, isAccountBusy, isConcurrencyFull };
+// ----------------------------------------------------------------
+// Launch an anonymous browser (no account, no session)
+// Uses concurrency slot so anon + account browsers share the cap
+// ----------------------------------------------------------------
+
+let _anonSeq = 0;
+
+async function launchAnonymous() {
+  if (isConcurrencyFull()) {
+    throw new Error(`Concurrent browser limit reached (${MAX_CONCURRENT}). Try again later.`);
+  }
+
+  const anonId = `anon_${++_anonSeq}`;
+  const viewport = pick(DESKTOP_VIEWPORTS);
+  const ua = pick(USER_AGENTS);
+  const gpuPair = pick(GPU_PAIRS);
+  const seed = randInt(100000, 999999999);
+
+  const launchOptions = {
+    headless: true,
+    args: [
+      '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
+      '--disable-blink-features=AutomationControlled', '--disable-infobars',
+      '--disable-extensions', '--disable-default-apps', '--no-first-run',
+      '--no-default-browser-check', '--disable-features=TranslateUI,VizDisplayCompositor',
+      '--disable-ipc-flooding-protection', '--password-store=basic', '--use-mock-keychain',
+      `--window-size=${viewport.width},${viewport.height}`,
+    ],
+  };
+
+  const browser = await chromium.launch(launchOptions);
+  const context = await browser.newContext({
+    viewport,
+    userAgent: ua,
+    locale: 'en-US',
+    timezoneId: 'America/New_York',
+    extraHTTPHeaders: { 'Accept-Language': 'en-US,en;q=0.9' },
+  });
+  await context.addInitScript(buildFingerprintScript(seed, viewport, ua, gpuPair));
+  const page = await context.newPage();
+
+  markBusy(anonId);
+  log.info('Launched anonymous browser');
+
+  return {
+    browser, context, page,
+    cleanup: async () => {
+      try { await browser.close(); } finally { markFree(anonId); }
+    },
+  };
+}
+
+module.exports = { launchForAccount, launchAnonymous, isAccountBusy, isConcurrencyFull };

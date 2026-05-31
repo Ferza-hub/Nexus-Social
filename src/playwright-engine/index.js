@@ -1,7 +1,7 @@
 'use strict';
 
 const { makeLogger } = require('../utils/logger');
-const { launchForAccount, isAccountBusy, isConcurrencyFull } = require('./browser');
+const { launchForAccount, launchAnonymous, isAccountBusy, isConcurrencyFull } = require('./browser');
 const { saveSession } = require('../account-manager/session-manager');
 const am = require('../account-manager/index');
 
@@ -306,6 +306,51 @@ function _buildArgs(action, platform, account, params) {
 }
 
 // ----------------------------------------------------------------
+// Anonymous view — no account needed, fresh throwaway browser
+// ----------------------------------------------------------------
+
+const _DISMISS_SELECTORS = {
+  facebook:  ['[aria-label="Close"]', 'div[role="dialog"] [aria-label="Close"]', '[data-testid="close-button"]', 'div[role="dialog"] button:has-text("Close")'],
+  instagram: ['[aria-label="Close"]', 'button:has-text("Not now")', 'div[role="dialog"] [aria-label="Close"]'],
+  tiktok:    ['[data-e2e="modal-close-inner-button"]', 'button:has-text("Later")', 'button:has-text("Skip")'],
+  twitter:   ['[aria-label="Close"]', 'div[data-testid="sheetDialog"] [aria-label="Close"]'],
+  youtube:   [],
+  threads:   ['[aria-label="Close"]'],
+};
+
+async function executeAnonymousView(platform, url) {
+  let session = null;
+  try {
+    session = await launchAnonymous();
+    const { page } = session;
+
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+
+    // Small wait for popups to appear, then dismiss
+    await new Promise(r => setTimeout(r, 2000));
+    for (const sel of (_DISMISS_SELECTORS[platform] ?? [])) {
+      try {
+        const el = await page.$(sel);
+        if (el) { await el.click(); break; }
+      } catch (_) {}
+    }
+
+    // Simulate natural viewing — slight scroll, then wait
+    await page.mouse.wheel(0, Math.floor(Math.random() * 200 + 50));
+    const watchMs = Math.floor(Math.random() * 17000 + 8000); // 8–25s
+    await new Promise(r => setTimeout(r, watchMs));
+
+    log.info('Anonymous view completed', { platform, watchMs });
+    return { success: true };
+  } catch (err) {
+    log.warn('Anonymous view failed', { platform, url, err: err.message });
+    return { success: false, reason: err.message };
+  } finally {
+    if (session) await session.cleanup();
+  }
+}
+
+// ----------------------------------------------------------------
 // Convenience: run login + save session for a fresh account
 // ----------------------------------------------------------------
 
@@ -315,5 +360,6 @@ async function loginAndSaveSession(accountId, platform) {
 
 module.exports = {
   executeAction,
+  executeAnonymousView,
   loginAndSaveSession,
 };
