@@ -38,11 +38,11 @@ router.get('/', (req, res) => {
 // POST /api/accounts
 router.post('/', (req, res) => {
   try {
-    const { username, password, email, phone, platform, proxyId, twoFaSecret, notes } = req.body;
-    if (!username || !password || !platform) {
-      return res.status(400).json({ error: 'username, password, platform required' });
+    const { username, password, email, phone, platform, proxyId, twoFaSecret, notes, accountRole } = req.body;
+    if (!username || !platform) {
+      return res.status(400).json({ error: 'username and platform required' });
     }
-    const id = am.addAccount({ username, password, email, phone, platform, proxyId, twoFaSecret, notes });
+    const id = am.addAccount({ username, password, email, phone, platform, proxyId, twoFaSecret, notes, accountRole });
     res.status(201).json({ id });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -99,6 +99,44 @@ router.post('/:id/warmup/restart', (req, res) => {
 router.get('/alerts/all', (req, res) => {
   try {
     res.json(getAlerts());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PATCH /api/accounts/:id/role
+router.patch('/:id/role', (req, res) => {
+  try {
+    const { role } = req.body;
+    if (!['managed', 'traffic'].includes(role)) return res.status(400).json({ error: 'invalid role' });
+    getDb().prepare('UPDATE accounts SET account_role=?, updated_at=? WHERE id=?')
+      .run(role, new Date().toISOString(), req.params.id);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/accounts/bulk-traffic
+router.post('/bulk-traffic', async (req, res) => {
+  try {
+    const { platform, lines } = req.body;
+    if (!platform || !Array.isArray(lines) || !lines.length) {
+      return res.status(400).json({ error: 'platform and lines required' });
+    }
+
+    const results = [];
+    for (const line of lines) {
+      const [username, password] = line.split(':').map(s => s.trim());
+      if (!username || !password) { results.push({ line, ok: false, error: 'invalid format' }); continue; }
+      try {
+        const id = am.addAccount({ username, password, platform, accountRole: 'traffic' });
+        results.push({ line, ok: true, id });
+      } catch (err) {
+        results.push({ line, ok: false, error: err.message });
+      }
+    }
+    res.json({ results, added: results.filter(r => r.ok).length });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

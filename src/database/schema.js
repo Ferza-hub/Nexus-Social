@@ -216,6 +216,14 @@ CREATE INDEX IF NOT EXISTS idx_traffic_logs_job    ON traffic_logs(job_id, creat
 
 function runMigrations(db) {
   db.exec(SCHEMA);
+
+  // Additive column migrations — safe to run on every startup
+  const addCol = (table, col, def) => {
+    try { db.prepare(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`).run(); } catch (_) {}
+  };
+
+  addCol('accounts', 'login_method', `TEXT NOT NULL DEFAULT 'password'`);
+  addCol('accounts', 'account_role', `TEXT NOT NULL DEFAULT 'managed'`);
 }
 
 module.exports = { runMigrations };

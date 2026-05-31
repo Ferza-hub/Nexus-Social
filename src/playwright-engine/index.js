@@ -309,6 +309,15 @@ function _buildArgs(action, platform, account, params) {
 // Anonymous view — no account needed, fresh throwaway browser
 // ----------------------------------------------------------------
 
+const _REFERRERS = {
+  facebook:  ['https://www.google.com/', 'https://l.facebook.com/', null, null, 'https://www.facebook.com/'],
+  instagram: ['https://www.google.com/', null, null, 'https://l.instagram.com/', 'https://www.facebook.com/'],
+  tiktok:    ['https://www.google.com/', null, null, 'https://vm.tiktok.com/', 'https://www.tiktok.com/'],
+  youtube:   ['https://www.google.com/', null, null, null, 'https://m.youtube.com/', 'https://t.co/'],
+  twitter:   ['https://www.google.com/', null, 'https://t.co/', null, 'https://www.twitter.com/'],
+  threads:   ['https://www.google.com/', null, null, 'https://www.instagram.com/', 'https://l.threads.net/'],
+};
+
 const _DISMISS_SELECTORS = {
   facebook:  ['[aria-label="Close"]', 'div[role="dialog"] [aria-label="Close"]', '[data-testid="close-button"]', 'div[role="dialog"] button:has-text("Close")'],
   instagram: ['[aria-label="Close"]', 'button:has-text("Not now")', 'div[role="dialog"] [aria-label="Close"]'],
@@ -324,7 +333,10 @@ async function executeAnonymousView(platform, url) {
     session = await launchAnonymous();
     const { page } = session;
 
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    const refList = _REFERRERS[platform] ?? [null];
+    const referer = refList[Math.floor(Math.random() * refList.length)] ?? undefined;
+
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000, referer });
 
     // Small wait for popups to appear, then dismiss
     await new Promise(r => setTimeout(r, 2000));
@@ -335,8 +347,13 @@ async function executeAnonymousView(platform, url) {
       } catch (_) {}
     }
 
-    // Simulate natural viewing — slight scroll, then wait
-    await page.mouse.wheel(0, Math.floor(Math.random() * 200 + 50));
+    // Natural scroll — simulate reading/watching
+    const scrolls = Math.floor(Math.random() * 4) + 1;
+    for (let i = 0; i < scrolls; i++) {
+      await page.mouse.wheel(0, Math.floor(Math.random() * 150 + 50));
+      await new Promise(r => setTimeout(r, Math.floor(Math.random() * 2000 + 500)));
+    }
+
     const watchMs = Math.floor(Math.random() * 17000 + 8000); // 8–25s
     await new Promise(r => setTimeout(r, watchMs));
 

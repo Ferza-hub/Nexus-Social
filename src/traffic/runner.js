@@ -146,7 +146,7 @@ async function runJob(jobId) {
     // Account-based path — likes / followers
     // ----------------------------------------------------------------
     const accounts = shuffle(
-      db.prepare("SELECT * FROM accounts WHERE platform=? AND status='active'").all(job.platform)
+      db.prepare("SELECT * FROM accounts WHERE platform=? AND status='active' AND account_role='traffic'").all(job.platform)
     );
 
     if (accounts.length === 0) {

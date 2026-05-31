@@ -24,7 +24,7 @@ router.get('/accounts', (req, res) => {
     const { platform } = req.query;
     if (!platform) return res.status(400).json({ error: 'platform required' });
     const row = getDb().prepare(
-      "SELECT COUNT(*) AS n FROM accounts WHERE platform=? AND status='active'"
+      "SELECT COUNT(*) AS n FROM accounts WHERE platform=? AND status='active' AND account_role='traffic'"
     ).get(platform);
     res.json({ platform, count: row?.n ?? 0 });
   } catch (err) {
@@ -54,7 +54,7 @@ router.post('/', async (req, res) => {
     let avail = 0;
     if (!actionDef.canAnon) {
       avail = db.prepare(
-        "SELECT COUNT(*) AS n FROM accounts WHERE platform=? AND status='active'"
+        "SELECT COUNT(*) AS n FROM accounts WHERE platform=? AND status='active' AND account_role='traffic'"
       ).get(platform)?.n ?? 0;
 
       if (avail === 0) {

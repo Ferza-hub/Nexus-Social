@@ -16,17 +16,19 @@ const log = makeLogger('AccountManager');
 // Account CRUD
 // ----------------------------------------------------------------
 
-function addAccount({ username, password, email, phone, platform, proxyId, twoFaSecret, notes }) {
+function addAccount({ username, password, email, phone, platform, proxyId, twoFaSecret, notes, accountRole = 'managed' }) {
   const db = getDb();
   const now = new Date().toISOString();
 
   const result = db.prepare(`
-    INSERT INTO accounts (username, password, email, phone, platform, proxy_id, two_fa_secret, notes, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(username, password, email ?? null, phone ?? null, platform, proxyId ?? null, twoFaSecret ?? null, notes ?? null, now, now);
+    INSERT INTO accounts (username, password, email, phone, platform, proxy_id, two_fa_secret, notes, account_role, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(username, password, email ?? null, phone ?? null, platform, proxyId ?? null, twoFaSecret ?? null, notes ?? null, accountRole, now, now);
 
   const accountId = result.lastInsertRowid;
-  warmupScheduler.initWarmup(accountId, platform);
+  if (accountRole !== 'traffic') {
+    warmupScheduler.initWarmup(accountId, platform);
+  }
 
   log.info('Account added', { accountId, username, platform });
   return accountId;

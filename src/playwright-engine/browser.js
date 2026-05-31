@@ -48,6 +48,24 @@ const USER_AGENTS = [
   'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
 ];
 
+const ANON_TIMEZONES = [
+  'America/New_York', 'America/Chicago', 'America/Los_Angeles', 'America/Denver',
+  'America/Toronto', 'Europe/London', 'Europe/Berlin', 'Europe/Paris', 'Europe/Amsterdam',
+  'Asia/Tokyo', 'Asia/Singapore', 'Asia/Bangkok', 'Asia/Kolkata',
+  'Australia/Sydney', 'America/Sao_Paulo',
+];
+
+const ANON_LOCALES = [
+  ['en-US', 'en-US,en;q=0.9'],
+  ['en-GB', 'en-GB,en;q=0.9'],
+  ['en-AU', 'en-AU,en;q=0.9'],
+  ['de-DE', 'de-DE,de;q=0.9,en;q=0.8'],
+  ['fr-FR', 'fr-FR,fr;q=0.9,en;q=0.8'],
+  ['pt-BR', 'pt-BR,pt;q=0.9,en;q=0.8'],
+  ['es-ES', 'es-ES,es;q=0.9,en;q=0.8'],
+  ['ja-JP', 'ja-JP,ja;q=0.9,en;q=0.8'],
+];
+
 const GPU_PAIRS = [
   ['Google Inc. (NVIDIA)', 'ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)'],
   ['Google Inc. (Intel)',  'ANGLE (Intel, Intel(R) UHD Graphics 620 Direct3D11 vs_5_0 ps_5_0, D3D11)'],
@@ -372,13 +390,16 @@ async function launchAnonymous() {
     ],
   };
 
+  const timezone = pick(ANON_TIMEZONES);
+  const [locale, acceptLang] = pick(ANON_LOCALES);
+
   const browser = await chromium.launch(launchOptions);
   const context = await browser.newContext({
     viewport,
     userAgent: ua,
-    locale: 'en-US',
-    timezoneId: 'America/New_York',
-    extraHTTPHeaders: { 'Accept-Language': 'en-US,en;q=0.9' },
+    locale,
+    timezoneId: timezone,
+    extraHTTPHeaders: { 'Accept-Language': acceptLang },
   });
   await context.addInitScript(buildFingerprintScript(seed, viewport, ua, gpuPair));
   const page = await context.newPage();

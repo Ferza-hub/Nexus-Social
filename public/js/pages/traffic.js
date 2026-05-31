@@ -108,11 +108,24 @@ const TrafficPage = (() => {
           <h3 style="font-size:.95rem;margin:0 0 .6rem">Recent Jobs</h3>
           <div id="tr-history">Loading…</div>
         </div>
+      </div>
+
+      <div style="margin-top:1.5rem">
+        <div class="card" style="padding:1.25rem">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.9rem">
+            <h3 style="margin:0;font-size:.95rem">Traffic Accounts <span class="text-muted text-sm">(for Likes &amp; Followers)</span></h3>
+            <button class="btn btn-primary btn-sm" onclick="TrafficPage._addTrafficAccounts()">+ Bulk Import</button>
+          </div>
+          <div id="tr-acct-summary" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:.5rem">
+            Loading…
+          </div>
+        </div>
       </div>`;
 
     _refreshActionGrid(_platform);
     _refreshAvailability(_platform);
     _loadHistory();
+    _loadTrafficAccounts();
   }
 
   function destroy() {
@@ -420,6 +433,81 @@ const TrafficPage = (() => {
     _startPoll(jobId);
   }
 
+  // ----------------------------------------------------------------
+  // Traffic Accounts panel
+  // ----------------------------------------------------------------
+
+  async function _loadTrafficAccounts() {
+    const platforms = ['instagram','tiktok','twitter','youtube','facebook','threads'];
+    const el = document.getElementById('tr-acct-summary');
+    if (!el) return;
+    try {
+      const counts = await Promise.all(
+        platforms.map(p => API.get(`/api/traffic/accounts?platform=${p}`).catch(() => ({ platform: p, count: 0 })))
+      );
+      el.innerHTML = counts.map(d => {
+        const meta = { instagram:'📸', tiktok:'🎵', twitter:'🐦', youtube:'▶️', facebook:'👥', threads:'🧵' };
+        return `
+          <div style="background:var(--bg-2);border-radius:6px;padding:.65rem .85rem;text-align:center">
+            <div style="font-size:1.1rem">${meta[d.platform] ?? '?'}</div>
+            <div style="font-size:.78rem;color:var(--text-muted);margin:.1rem 0">${d.platform}</div>
+            <div style="font-weight:600;color:${d.count > 0 ? '#22c55e' : 'var(--text-muted)'}">${d.count}</div>
+          </div>`;
+      }).join('');
+    } catch (_) {}
+  }
+
+  function _addTrafficAccounts() {
+    Modal.open('Bulk Import Traffic Accounts', `
+      <div class="form-group">
+        <label>Platform</label>
+        <select id="tr-bulk-platform">
+          <option value="instagram">📸 Instagram</option>
+          <option value="tiktok">🎵 TikTok</option>
+          <option value="twitter">🐦 Twitter/X</option>
+          <option value="youtube">▶️ YouTube</option>
+          <option value="facebook">👥 Facebook</option>
+          <option value="threads">🧵 Threads</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Accounts <span class="text-muted text-sm">— one per line, format: username:password</span></label>
+        <textarea id="tr-bulk-lines" rows="8" style="width:100%;box-sizing:border-box;font-family:monospace;font-size:.82rem"
+          placeholder="john_doe:mypassword123&#10;jane_doe:secret456&#10;worker_123:p@ssw0rd"></textarea>
+      </div>
+      <div id="tr-bulk-result" style="font-size:.82rem;margin-bottom:.5rem"></div>
+      <div class="flex gap-1" style="justify-content:flex-end">
+        <button class="btn btn-ghost" onclick="Modal.close()">Cancel</button>
+        <button class="btn btn-primary" onclick="TrafficPage._submitBulkTraffic()">Import</button>
+      </div>`);
+  }
+
+  async function _submitBulkTraffic() {
+    const platform = document.getElementById('tr-bulk-platform')?.value;
+    const raw = document.getElementById('tr-bulk-lines')?.value ?? '';
+    const lines = raw.split('\n').map(l => l.trim()).filter(Boolean);
+    if (!lines.length) return Toast.error('Paste at least one username:password line');
+
+    const resultEl = document.getElementById('tr-bulk-result');
+    if (resultEl) resultEl.textContent = 'Importing…';
+
+    try {
+      const data = await API.post('/api/accounts/bulk-traffic', { platform, lines });
+      if (resultEl) {
+        resultEl.innerHTML = `<span style="color:#22c55e">✓ Added ${data.added} of ${lines.length}</span>` +
+          (data.added < lines.length
+            ? ` — ${data.results.filter(r => !r.ok).map(r => r.error).slice(0,3).join(', ')}`
+            : '');
+      }
+      if (data.added > 0) {
+        await _loadTrafficAccounts();
+        _refreshAvailability(_platform);
+      }
+    } catch (err) {
+      Toast.error(err.message);
+    }
+  }
+
   function _age(isoStr) {
     const diff = Date.now() - new Date(isoStr).getTime();
     const m    = Math.floor(diff / 60000);
@@ -430,5 +518,5 @@ const TrafficPage = (() => {
     return `${Math.floor(h / 24)}d ago`;
   }
 
-  return { render, destroy, _setPlatform, _setAction, _start, _stop, _watchJob };
+  return { render, destroy, _setPlatform, _setAction, _start, _stop, _watchJob, _addTrafficAccounts, _submitBulkTraffic };
 })();

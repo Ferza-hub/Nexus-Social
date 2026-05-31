@@ -26,7 +26,7 @@ const AccountsPage = (() => {
       <div class="table-wrap">
         <table>
           <thead><tr>
-            <th>#</th><th>Username</th><th>Platform</th><th>Status</th>
+            <th>#</th><th>Username</th><th>Platform</th><th>Role</th><th>Status</th>
             <th>Warmup</th><th>API</th><th>Actions</th>
           </tr></thead>
           <tbody>
@@ -35,6 +35,11 @@ const AccountsPage = (() => {
                 <td class="text-muted text-sm">${acc.id}</td>
                 <td><strong>${acc.username}</strong>${acc.email ? `<br><span class="text-muted text-sm">${acc.email}</span>` : ''}</td>
                 <td><span class="tag">${acc.platform}</span></td>
+                <td>
+                  ${acc.account_role === 'traffic'
+                    ? `<span class="tag" style="background:rgba(59,130,246,.15);color:#3b82f6">traffic</span>`
+                    : `<span class="tag" style="background:rgba(34,197,94,.1);color:#22c55e">managed</span>`}
+                </td>
                 <td>${badge(acc.status)}</td>
                 <td>${warmupBar(acc.warmup)}</td>
                 <td>${acc.api_connected ? '<span class="text-success">✓</span>' : '<span class="text-muted">—</span>'}</td>
@@ -42,6 +47,9 @@ const AccountsPage = (() => {
                   <div class="flex gap-1">
                     <button class="btn btn-ghost btn-sm" onclick="AccountsPage.showHealth(${acc.id}, '${acc.username}')">Health</button>
                     <button class="btn btn-ghost btn-sm" onclick="AccountsPage.showUsage(${acc.id}, '${acc.username}')">Usage</button>
+                    <button class="btn btn-ghost btn-sm" onclick="AccountsPage.toggleRole(${acc.id}, '${acc.account_role ?? 'managed'}')">
+                      ${acc.account_role === 'traffic' ? '→ managed' : '→ traffic'}
+                    </button>
                     <button class="btn btn-danger btn-sm" onclick="AccountsPage.remove(${acc.id})">✕</button>
                   </div>
                 </td>
@@ -127,6 +135,7 @@ const AccountsPage = (() => {
       phone:        document.getElementById('acc-phone').value.trim() || undefined,
       twoFaSecret:  document.getElementById('acc-2fa').value.trim() || undefined,
       notes:        document.getElementById('acc-notes').value.trim() || undefined,
+      accountRole:  'managed',
     };
     if (!body.username || !body.password) return Toast.error('Username and password required');
     try {
@@ -187,5 +196,16 @@ const AccountsPage = (() => {
     }
   }
 
-  return { render, reload, add, _submitAdd, remove, showHealth, showUsage };
+  async function toggleRole(id, currentRole) {
+    const newRole = currentRole === 'traffic' ? 'managed' : 'traffic';
+    try {
+      await API.patch(`/api/accounts/${id}/role`, { role: newRole });
+      Toast.success(`Role changed to ${newRole}`);
+      reload();
+    } catch (err) {
+      Toast.error(err.message);
+    }
+  }
+
+  return { render, reload, add, _submitAdd, remove, showHealth, showUsage, toggleRole };
 })();
