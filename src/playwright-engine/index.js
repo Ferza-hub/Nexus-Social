@@ -313,7 +313,7 @@ const _REFERRERS = {
   facebook:  ['https://www.google.com/', 'https://l.facebook.com/', null, null, 'https://www.facebook.com/'],
   instagram: ['https://www.google.com/', null, null, 'https://l.instagram.com/', 'https://www.facebook.com/'],
   tiktok:    ['https://www.google.com/', null, null, 'https://vm.tiktok.com/', 'https://www.tiktok.com/'],
-  youtube:   ['https://www.google.com/', null, null, null, 'https://m.youtube.com/', 'https://t.co/'],
+  youtube:   ['https://www.google.com/', 'https://www.google.com/', null, 'https://m.youtube.com/'],
   twitter:   ['https://www.google.com/', null, 'https://t.co/', null, 'https://www.twitter.com/'],
   threads:   ['https://www.google.com/', null, null, 'https://www.instagram.com/', 'https://l.threads.net/'],
 };
@@ -323,9 +323,35 @@ const _DISMISS_SELECTORS = {
   instagram: ['[aria-label="Close"]', 'button:has-text("Not now")', 'div[role="dialog"] [aria-label="Close"]'],
   tiktok:    ['[data-e2e="modal-close-inner-button"]', 'button:has-text("Later")', 'button:has-text("Skip")'],
   twitter:   ['[aria-label="Close"]', 'div[data-testid="sheetDialog"] [aria-label="Close"]'],
-  youtube:   [],
+  youtube:   [
+    // EU cookie consent
+    'button[aria-label="Accept all"]',
+    'button[aria-label="Reject all"]',
+    '.eom-buttons button:first-child',
+    // Age gate / sign-in nag
+    '#dismiss-button',
+    'paper-button[dialog-dismiss]',
+    'tp-yt-paper-button[aria-label="No thanks"]',
+  ],
   threads:   ['[aria-label="Close"]'],
 };
+
+// Strip tracking params that can cause YouTube to redirect to login
+function _cleanYoutubeUrl(url) {
+  try {
+    const u = new URL(url);
+    // youtu.be short → full watch URL
+    if (u.hostname === 'youtu.be') {
+      const vid = u.pathname.slice(1);
+      return `https://www.youtube.com/watch?v=${vid}`;
+    }
+    // /shorts/ID → keep as-is but strip tracking params
+    ['si', 'feature', 'pp', 'ab_channel'].forEach(p => u.searchParams.delete(p));
+    return u.toString();
+  } catch (_) {
+    return url;
+  }
+}
 
 async function executeAnonymousView(platform, url) {
   let session = null;
@@ -333,17 +359,41 @@ async function executeAnonymousView(platform, url) {
     session = await launchAnonymous();
     const { page } = session;
 
+    const targetUrl = platform === 'youtube' ? _cleanYoutubeUrl(url) : url;
+
     const refList = _REFERRERS[platform] ?? [null];
     const referer = refList[Math.floor(Math.random() * refList.length)] ?? undefined;
 
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000, referer });
+    await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 45000, referer });
 
-    // Small wait for popups, then dismiss
-    await new Promise(r => setTimeout(r, 1500));
+    // Wait a bit longer for YouTube's heavy SPA to settle
+    const popupWait = platform === 'youtube' ? 3000 : 1500;
+    await new Promise(r => setTimeout(r, popupWait));
+
+    // Dismiss popups — try all selectors, not just the first match
     for (const sel of (_DISMISS_SELECTORS[platform] ?? [])) {
       try {
         const el = await page.$(sel);
-        if (el) { await el.click(); break; }
+        if (el) {
+          await el.click();
+          await new Promise(r => setTimeout(r, 500));
+        }
+      } catch (_) {}
+    }
+
+    // YouTube-specific: ensure video plays
+    if (platform === 'youtube') {
+      try {
+        await page.waitForSelector('video', { timeout: 8000 });
+        const isPaused = await page.evaluate(() => {
+          const v = document.querySelector('video');
+          return v ? v.paused : true;
+        });
+        if (isPaused) {
+          // Try clicking the player to start playback
+          await page.click('#movie_player, .html5-video-player, video').catch(() => {});
+          await new Promise(r => setTimeout(r, 800));
+        }
       } catch (_) {}
     }
 
