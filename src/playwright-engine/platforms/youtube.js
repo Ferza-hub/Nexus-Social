@@ -245,23 +245,56 @@ async function watchVideo(page, videoUrl, { watchPct = null, clickThrough = fals
 }
 
 // ----------------------------------------------------------------
+// URL utilities — used by ghost system and anonymous view
+// ----------------------------------------------------------------
+
+function cleanUrl(url) {
+  try {
+    const u = new URL(url);
+    if (u.hostname === 'youtu.be') {
+      return `https://www.youtube.com/watch?v=${u.pathname.slice(1)}`;
+    }
+    ['si', 'feature', 'pp', 'ab_channel'].forEach(p => u.searchParams.delete(p));
+    return u.toString();
+  } catch (_) { return url; }
+}
+
+function extractId(url) {
+  try {
+    const u = new URL(url);
+    if (u.searchParams.get('v'))         return u.searchParams.get('v');
+    if (u.pathname.includes('/shorts/')) return u.pathname.split('/shorts/')[1]?.split('?')[0];
+    if (u.hostname === 'youtu.be')       return u.pathname.slice(1).split('?')[0];
+    return null;
+  } catch (_) { return null; }
+}
+
+// ----------------------------------------------------------------
 // 3. searchAndWatch
-//    YouTube homepage → type keyword → click result → watchVideo
-//    Builds proper referrer chain + search intent signal.
+//    YouTube homepage → type keyword → reach target video → watchVideo
+//
+//    opts.targetUrl (ghost mode): search builds organic referrer, then
+//      navigate to the specific target video (click from results if found,
+//      direct nav if not). Referrer chain: search results → target video.
+//
+//    without targetUrl: click a random top result (normal account use).
 // ----------------------------------------------------------------
 
 async function searchAndWatch(page, keyword, opts = {}) {
-  log.debug('searchAndWatch', { keyword });
+  const { watchPct = null, targetUrl = null, clickThrough = false } = opts;
+  log.debug('searchAndWatch', { keyword, targetUrl: targetUrl ? '(set)' : null });
 
-  await page.goto(BASE_URL, { waitUntil: 'domcontentloaded', timeout: 25000 });
-  await h.waitForLoad(page);
-  await h.preAction();
-  await _dismissPopups(page);
+  if (!clickThrough) {
+    await page.goto(BASE_URL, { waitUntil: 'domcontentloaded', timeout: 25000 });
+    await h.waitForLoad(page);
+    await h.preAction();
+    await _dismissPopups(page);
+  }
 
   const detection = await checkForDetection(page);
   if (detection) return { success: false, event: detection };
 
-  // Focus search box and type naturally
+  // Type keyword into search box
   const searchBox = await page.$(SEL.search_input);
   if (!searchBox) return { success: false, event: 'warning', message: 'Search box not found' };
 
@@ -278,28 +311,62 @@ async function searchAndWatch(page, keyword, opts = {}) {
   await h.waitForLoad(page, 15000);
   await h.delay(h.randInt(1500, 3500));
 
-  // Browse results naturally
+  // Browse results naturally (builds session intent signal)
   await h.humanScroll(page, { scrolls: h.randInt(2, 4) });
   await h.delay(h.randInt(1000, 2500));
 
-  // Pick one of the top 5 video results
-  const results = await page.$$(SEL.search_results);
-  if (results.length === 0) {
-    return { success: false, event: 'warning', message: 'No search results found' };
+  if (targetUrl) {
+    // Ghost path: try to find target video in results and click it (organic);
+    // fall back to direct navigation if not visible (search page = referrer).
+    const videoId = extractId(targetUrl);
+    let navigated = false;
+
+    if (videoId) {
+      try {
+        const link = await page.$(`a[href*="${videoId}"]`);
+        if (link) {
+          const box = await link.boundingBox().catch(() => null);
+          if (box) {
+            await h.moveMouseTo(
+              page,
+              box.x + h.randInt(5, Math.max(6, box.width  - 5)),
+              box.y + h.randInt(3, Math.max(4, box.height - 3)),
+            );
+            await h.delay(h.randInt(150, 400));
+          }
+          await link.click();
+          navigated = true;
+          await h.waitForLoad(page, 20000);
+          await h.delay(h.randInt(2000, 4000));
+        }
+      } catch (_) {}
+    }
+
+    if (!navigated) {
+      // Not in results → navigate directly; search page is still the referrer
+      await page.goto(cleanUrl(targetUrl), { waitUntil: 'domcontentloaded', timeout: 40000 });
+      await h.delay(h.randInt(2000, 4000));
+    }
+
+  } else {
+    // Normal path: click one of the top 5 results
+    const results = await page.$$(SEL.search_results);
+    if (results.length === 0) {
+      return { success: false, event: 'warning', message: 'No search results found' };
+    }
+    const chosen = results[h.randInt(0, Math.min(results.length - 1, 4))];
+    const box    = await chosen.boundingBox().catch(() => null);
+    if (box) {
+      await h.moveMouseTo(page, box.x + box.width / 2, box.y + box.height / 2);
+      await h.shortPause();
+    }
+    await chosen.click();
+    await h.waitForLoad(page, 20000);
+    await h.delay(h.randInt(2000, 4000));
   }
 
-  const chosen = results[h.randInt(0, Math.min(results.length - 1, 4))];
-  const box    = await chosen.boundingBox().catch(() => null);
-  if (box) {
-    await h.moveMouseTo(page, box.x + box.width / 2, box.y + box.height / 2);
-    await h.shortPause();
-  }
-  await chosen.click();
-  await h.waitForLoad(page, 20000);
-  await h.delay(h.randInt(2000, 4000));
-
-  // Watch the chosen video (already on page — clickThrough mode)
-  return watchVideo(page, page.url(), { ...opts, clickThrough: true });
+  // Watch whatever video we landed on
+  return watchVideo(page, page.url(), { watchPct, clickThrough: true });
 }
 
 // ----------------------------------------------------------------
@@ -500,4 +567,7 @@ module.exports = {
   likeVideo,
   commentVideo,
   checkForDetection,
+  // URL utilities for ghost / anonymous view systems
+  cleanUrl,
+  extractId,
 };

@@ -345,30 +345,13 @@ const _DISMISS_SELECTORS = {
   threads:   ['[aria-label="Close"]'],
 };
 
-// Strip tracking params that can cause YouTube to redirect to login
-function _cleanYoutubeUrl(url) {
-  try {
-    const u = new URL(url);
-    // youtu.be short → full watch URL
-    if (u.hostname === 'youtu.be') {
-      const vid = u.pathname.slice(1);
-      return `https://www.youtube.com/watch?v=${vid}`;
-    }
-    // /shorts/ID → keep as-is but strip tracking params
-    ['si', 'feature', 'pp', 'ab_channel'].forEach(p => u.searchParams.delete(p));
-    return u.toString();
-  } catch (_) {
-    return url;
-  }
-}
-
 async function executeAnonymousView(platform, url) {
   let session = null;
   try {
     session = await launchAnonymous();
     const { page } = session;
 
-    const targetUrl = platform === 'youtube' ? _cleanYoutubeUrl(url) : url;
+    const targetUrl = platform === 'youtube' ? youtube.cleanUrl(url) : url;
 
     const refList = _REFERRERS[platform] ?? [null];
     const referer = refList[Math.floor(Math.random() * refList.length)] ?? undefined;
@@ -427,169 +410,24 @@ async function executeAnonymousView(platform, url) {
 }
 
 // ----------------------------------------------------------------
-// Ghost view — uses persistent browser identity
-// Falls back to pure anonymous if no ghost is ready
+// Ghost view — persistent browser identity via storageState
+// Delegates to platform modules so watch behaviour is identical to
+// account-based sessions (real duration, pause/resume, etc.)
+// Falls back to anonymous if no ghost is ready.
 // ----------------------------------------------------------------
 
-function _randInt(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
-function _delay(ms) { return new Promise(r => setTimeout(r, ms)); }
-
-const _YT_SEARCH_TERMS = [
+// Search terms used when ghost does YouTube organic navigation
+const _GHOST_YT_TERMS = [
   'funny moments compilation', 'best music mix 2024', 'travel documentary',
   'cooking recipe easy', 'workout at home', 'tech news today',
   'movie review', 'nature sounds relaxing', 'street food tour',
   'gaming highlights', 'diy project', 'science explained',
 ];
 
-async function _naturalMouseMove(page, steps = 4) {
-  try {
-    const vp = page.viewportSize() ?? { width: 1366, height: 768 };
-    for (let i = 0; i < steps; i++) {
-      await page.mouse.move(
-        _randInt(80, vp.width  - 80),
-        _randInt(80, vp.height - 80),
-        { steps: _randInt(8, 25) }
-      );
-      await _delay(_randInt(150, 500));
-    }
-  } catch (_) {}
-}
-
-function _extractYouTubeId(url) {
-  try {
-    const u = new URL(url);
-    if (u.searchParams.get('v'))           return u.searchParams.get('v');
-    if (u.pathname.includes('/shorts/'))   return u.pathname.split('/shorts/')[1]?.split('?')[0];
-    if (u.hostname === 'youtu.be')         return u.pathname.slice(1).split('?')[0];
-    return null;
-  } catch (_) { return null; }
-}
-
-async function _youtubeGhostView(page, url) {
-  const videoId    = _extractYouTubeId(url);
-  const isShorts   = url.includes('/shorts/');
-  const searchTerm = _YT_SEARCH_TERMS[_randInt(0, _YT_SEARCH_TERMS.length - 1)];
-
-  // ── Step 1: YouTube homepage (ghost has cookies → returning visitor) ──
-  await page.goto('https://www.youtube.com/', {
-    waitUntil: 'domcontentloaded', timeout: 45_000,
-  });
-  await _delay(_randInt(1800, 3500));
-
-  // Natural mouse idle on homepage
-  await _naturalMouseMove(page, _randInt(2, 4));
-
-  // Dismiss any popup
-  for (const sel of _DISMISS_SELECTORS.youtube) {
-    try {
-      const el = await page.$(sel);
-      if (el) { await el.click(); await _delay(700); }
-    } catch (_) {}
-  }
-
-  // ── Step 2: Search a natural term (not the video ID) ─────────────────
-  try {
-    const searchBox = await page.$('input[name="search_query"]');
-    if (searchBox) {
-      // Move mouse to search box naturally
-      const box = await searchBox.boundingBox();
-      if (box) {
-        await page.mouse.move(
-          box.x + box.width / 2 + _randInt(-10, 10),
-          box.y + box.height / 2 + _randInt(-3, 3),
-          { steps: _randInt(10, 20) }
-        );
-        await _delay(_randInt(200, 500));
-      }
-      await searchBox.click();
-      await _delay(_randInt(400, 900));
-
-      for (const ch of searchTerm) {
-        await page.keyboard.type(ch);
-        await _delay(_randInt(50, 160));
-      }
-      await _delay(_randInt(400, 800));
-      await page.keyboard.press('Enter');
-      await _delay(_randInt(2500, 4500));
-
-      // Natural mouse movement over results
-      await _naturalMouseMove(page, _randInt(2, 3));
-      await page.mouse.wheel(0, _randInt(150, 350));
-      await _delay(_randInt(1000, 2000));
-    }
-  } catch (_) {}
-
-  // ── Step 3: Navigate to target video ─────────────────────────────────
-  // Referrer is now the search results page — looks organic
-  const targetUrl = _cleanYoutubeUrl(url);
-  let navigated   = false;
-
-  if (videoId) {
-    try {
-      const link = await page.$(`a[href*="${videoId}"]`);
-      if (link) {
-        const box = await link.boundingBox();
-        if (box) {
-          await page.mouse.move(
-            box.x + _randInt(5, box.width - 5),
-            box.y + _randInt(3, box.height - 3),
-            { steps: _randInt(8, 18) }
-          );
-          await _delay(_randInt(150, 400));
-        }
-        await link.click();
-        navigated = true;
-        await _delay(_randInt(2500, 4500));
-      }
-    } catch (_) {}
-  }
-
-  if (!navigated) {
-    await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 45_000 });
-    await _delay(_randInt(2000, 3500));
-  }
-
-  // ── Step 4: Dismiss any post-navigation popups ────────────────────────
-  for (const sel of _DISMISS_SELECTORS.youtube) {
-    try {
-      const el = await page.$(sel);
-      if (el) { await el.click(); await _delay(500); }
-    } catch (_) {}
-  }
-
-  // ── Step 5: Ensure video plays ────────────────────────────────────────
-  try {
-    await page.waitForSelector('video', { timeout: 8000 });
-    const isPaused = await page.evaluate(() => document.querySelector('video')?.paused ?? true);
-    if (isPaused) {
-      const player = await page.$('#movie_player, .html5-video-player');
-      if (player) {
-        const box = await player.boundingBox();
-        if (box) await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
-      }
-    }
-  } catch (_) {}
-
-  // ── Step 6: Watch with natural micro-interactions ─────────────────────
-  const watchMs  = isShorts ? _randInt(8_000, 18_000) : _randInt(22_000, 48_000);
-  const quarter  = Math.floor(watchMs / 4);
-
-  await _delay(quarter);
-  await _naturalMouseMove(page, 2);
-  await _delay(quarter);
-  // Mid-video scroll (reading description / comments area)
-  await page.mouse.wheel(0, _randInt(80, 200)).catch(() => {});
-  await _delay(_randInt(800, 1800));
-  await page.mouse.wheel(0, -_randInt(40, 100)).catch(() => {});
-  await _delay(quarter);
-  await _naturalMouseMove(page, 2);
-  await _delay(quarter);
-}
+function _ri(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
 
 async function executeGhostView(platform, url) {
   const ghost = gm.pickGhost();
-
-  // No ghost ready → fall back to anonymous
   if (!ghost) {
     log.debug('No ghost available — falling back to anonymous');
     return executeAnonymousView(platform, url);
@@ -601,25 +439,39 @@ async function executeGhostView(platform, url) {
     const { page, context } = session;
 
     if (platform === 'youtube') {
-      await _youtubeGhostView(page, url);
+      // Ghost is an anonymous returning visitor — storageState has YouTube cookies.
+      // searchAndWatch with targetUrl: organic search referrer → then land on target.
+      const isShorts  = url.includes('/shorts/');
+      const keyword   = _GHOST_YT_TERMS[_ri(0, _GHOST_YT_TERMS.length - 1)];
+      const watchPct  = isShorts ? (_ri(75, 100) / 100) : (_ri(40, 70) / 100);
+      await youtube.searchAndWatch(page, keyword, {
+        targetUrl: youtube.cleanUrl(url),
+        watchPct,
+      });
+
+    } else if (platform === 'facebook') {
+      // Ghost (no login) can only interact with public video URLs.
+      // watchVideo will attempt anonymous viewing; Facebook may redirect to login
+      // in which case the ghost view fails gracefully and is logged.
+      await facebook.watchVideo(page, url);
+
     } else {
-      // Generic path for other platforms: referer + dismiss + scroll + watch
+      // Generic platform: set referrer + navigate + scroll + wait
       const refList = _REFERRERS[platform] ?? [null];
-      const referer = refList[Math.floor(Math.random() * refList.length)] ?? undefined;
+      const referer = refList[_ri(0, refList.length - 1)] ?? undefined;
       await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45_000, referer });
-      await _delay(_randInt(1500, 3000));
+      await new Promise(r => setTimeout(r, _ri(1500, 3000)));
       for (const sel of (_DISMISS_SELECTORS[platform] ?? [])) {
-        try { const el = await page.$(sel); if (el) { await el.click(); await _delay(500); } } catch (_) {}
+        try { const el = await page.$(sel); if (el) { await el.click(); await new Promise(r => setTimeout(r, 500)); } } catch (_) {}
       }
-      const scrolls = _randInt(1, 3);
-      for (let i = 0; i < scrolls; i++) {
-        await page.mouse.wheel(0, _randInt(80, 200));
-        await _delay(_randInt(500, 1200));
+      for (let i = 0; i < _ri(1, 3); i++) {
+        await page.mouse.wheel(0, _ri(80, 200));
+        await new Promise(r => setTimeout(r, _ri(500, 1200)));
       }
-      await _delay(_randInt(8_000, 20_000));
+      await new Promise(r => setTimeout(r, _ri(8_000, 20_000)));
     }
 
-    // Save updated storageState — ghost's history grows with every view
+    // Persist updated storageState — watch history + cookies accumulate each session
     const state = await context.storageState();
     gm.saveStorageState(ghost.id, state);
     gm.recordUse(ghost.id);
