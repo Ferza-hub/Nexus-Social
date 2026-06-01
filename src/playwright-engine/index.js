@@ -64,12 +64,13 @@ const ACTION_MAP = {
     reply_tweet:   { fn: 'replyTweet',   rateType: 'comment' },
   },
   youtube: {
-    login:         { fn: 'login',             rateType: null },
-    scroll_feed:   { fn: 'scrollFeed',        rateType: null },
-    watch_video:   { fn: 'watchVideo',        rateType: 'watch_reel' },
-    like_video:    { fn: 'likeVideo',         rateType: 'like' },
-    subscribe:     { fn: 'subscribeChannel',  rateType: 'follow' },
-    comment:       { fn: 'commentVideo',      rateType: 'comment' },
+    login:          { fn: 'login',            rateType: null },
+    scroll_feed:    { fn: 'scrollFeed',       rateType: null },
+    watch_video:    { fn: 'watchVideo',       rateType: 'watch_reel' },
+    search_watch:   { fn: 'searchAndWatch',   rateType: 'watch_reel' },
+    like_video:     { fn: 'likeVideo',        rateType: 'like' },
+    subscribe:      { fn: 'subscribeChannel', rateType: 'follow' },
+    comment:        { fn: 'commentVideo',     rateType: 'comment' },
   },
   threads: {
     login:         { fn: 'login',        rateType: null },
@@ -82,8 +83,11 @@ const ACTION_MAP = {
   facebook: {
     login:         { fn: 'login',        rateType: null },
     scroll_feed:   { fn: 'scrollFeed',   rateType: null },
+    watch_video:   { fn: 'watchVideo',   rateType: 'watch_reel' },
+    watch_reel:    { fn: 'watchReel',    rateType: 'watch_reel' },
     like_post:     { fn: 'likePost',     rateType: 'like' },
     follow:        { fn: 'followUser',   rateType: 'follow' },
+    follow_page:   { fn: 'followPage',   rateType: 'follow' },
     comment:       { fn: 'comment',      rateType: 'comment' },
   },
   // instagram additions (already has entries above — merge here)
@@ -269,12 +273,13 @@ function _buildArgs(action, platform, account, params) {
   }
   if (platform === 'youtube') {
     switch (action) {
-      case 'login':        return [account];
-      case 'scroll_feed':  return [params];
-      case 'watch_video':  return [params.videoUrl];
-      case 'like_video':   return [params.videoUrl];
-      case 'subscribe':    return [params.channelUrl];
-      case 'comment':      return [params.videoUrl, params.text];
+      case 'login':         return [account];
+      case 'scroll_feed':   return [params];
+      case 'watch_video':   return [params.videoUrl, params];         // (page, url, opts{watchPct})
+      case 'search_watch':  return [params.keyword, params];          // (page, keyword, opts{watchPct})
+      case 'like_video':    return [params.videoUrl];
+      case 'subscribe':     return [params.channelUrl];
+      case 'comment':       return [params.videoUrl, params.text];
     }
   }
   if (platform === 'threads') {
@@ -291,8 +296,11 @@ function _buildArgs(action, platform, account, params) {
     switch (action) {
       case 'login':        return [account];
       case 'scroll_feed':  return [params];
+      case 'watch_video':  return [params.videoUrl];
+      case 'watch_reel':   return [params];                           // { reelCount, maxMs }
       case 'like_post':    return [params.postUrl];
       case 'follow':       return [params.profileUrl];
+      case 'follow_page':  return [params.profileUrl];
       case 'comment':      return [params.postUrl, params.text];
     }
   }
