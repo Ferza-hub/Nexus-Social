@@ -73,8 +73,16 @@ function runMigrations(db) {
     try { db.prepare(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`).run(); } catch (_) {}
   };
 
-  addCol('proxies',  'proxy_type', `TEXT NOT NULL DEFAULT 'residential'`);
-  addCol('proxies',  'geo_region', `TEXT`);
+  addCol('proxies',  'proxy_type',         `TEXT NOT NULL DEFAULT 'residential'`);
+  addCol('proxies',  'geo_region',         `TEXT`);
+
+  // accounts table — add columns missing from pre-refactor schema
+  addCol('accounts', 'platform',           `TEXT NOT NULL DEFAULT 'unknown'`);
+  addCol('accounts', 'email',              `TEXT NOT NULL DEFAULT ''`);
+  addCol('accounts', 'password',           `TEXT NOT NULL DEFAULT ''`);
+  addCol('accounts', 'storage_state_path', `TEXT`);
+  addCol('accounts', 'status',             `TEXT NOT NULL DEFAULT 'active'`);
+  addCol('accounts', 'last_used_at',       `DATETIME`);
 }
 
 module.exports = { runMigrations };
