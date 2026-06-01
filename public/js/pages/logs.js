@@ -15,7 +15,7 @@ const LogsPage = (() => {
   function renderEntry(e) {
     const time     = new Date(e.created_at).toLocaleString();
     const platform = e.platform || '—';
-    const who      = e.username || `#${e.account_id}`;
+    const who      = e.job_id ? `job #${e.job_id}` : '—';
     const action   = e.action || e.event_type || '—';
     const msg      = e.message || '';
     const cls      = eventClass(e);

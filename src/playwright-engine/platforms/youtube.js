@@ -212,7 +212,7 @@ async function watchVideo(page, videoUrl, { watchPct = null, watchMs: watchMsOve
   log.debug('watchVideo', { videoUrl, clickThrough });
 
   if (!clickThrough) {
-    const gotoOpts = { waitUntil: 'domcontentloaded', timeout: 25000 };
+    const gotoOpts = { waitUntil: 'domcontentloaded', timeout: 45000 };
     if (referer) gotoOpts.referer = referer;
     await page.goto(videoUrl, gotoOpts);
     await h.waitForLoad(page);
@@ -256,8 +256,14 @@ async function watchVideo(page, videoUrl, { watchPct = null, watchMs: watchMsOve
 function cleanUrl(url) {
   try {
     const u = new URL(url);
+    // youtu.be short links
     if (u.hostname === 'youtu.be') {
-      return `https://www.youtube.com/watch?v=${u.pathname.slice(1)}`;
+      return `https://www.youtube.com/watch?v=${u.pathname.slice(1).split('?')[0]}`;
+    }
+    // Shorts → regular watch URL (Shorts page blocks headless playback)
+    if (u.pathname.includes('/shorts/')) {
+      const id = u.pathname.split('/shorts/')[1]?.split('?')[0];
+      if (id) return `https://www.youtube.com/watch?v=${id}`;
     }
     ['si', 'feature', 'pp', 'ab_channel'].forEach(p => u.searchParams.delete(p));
     return u.toString();
