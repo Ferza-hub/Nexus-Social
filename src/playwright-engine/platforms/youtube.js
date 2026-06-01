@@ -212,10 +212,10 @@ async function watchVideo(page, videoUrl, { watchPct = null, watchMs: watchMsOve
   log.debug('watchVideo', { videoUrl, clickThrough });
 
   if (!clickThrough) {
-    const gotoOpts = { waitUntil: 'domcontentloaded', timeout: 30000 };
+    const gotoOpts = { waitUntil: 'commit', timeout: 30000 };
     if (referer) gotoOpts.referer = referer;
     await page.goto(videoUrl, gotoOpts);
-    await h.waitForLoad(page);
+    await page.waitForLoadState('domcontentloaded', { timeout: 20000 }).catch(() => {});
     await h.preAction();
   }
 

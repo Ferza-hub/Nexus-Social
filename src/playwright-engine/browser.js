@@ -420,23 +420,17 @@ const _proxyFailures  = new Map();
 const PROXY_SKIP_THRESHOLD = 3;
 const PROXY_SKIP_WINDOW_MS = 30 * 60 * 1000; // 30 minutes
 
-const PROXY_BAN_THRESHOLD = 5; // permanent DB inactive after this many failures
+const PROXY_BAN_THRESHOLD = 5;
 
 function recordProxyFailure(proxyId) {
   if (!proxyId) return;
   const now   = Date.now();
   const entry = _proxyFailures.get(proxyId) ?? { count: 0, lastAt: 0 };
-  if (now - entry.lastAt > PROXY_SKIP_WINDOW_MS) entry.count = 0; // window expired
+  if (now - entry.lastAt > PROXY_SKIP_WINDOW_MS) entry.count = 0;
   entry.count++;
   entry.lastAt = now;
   _proxyFailures.set(proxyId, entry);
-  if (entry.count >= PROXY_BAN_THRESHOLD) {
-    try {
-      getDb().prepare(`UPDATE proxies SET status='inactive' WHERE id=?`).run(proxyId);
-      _residentialProxies = null; // invalidate cache so next pick excludes it
-      log.warn('Proxy permanently deactivated after repeated failures', { proxyId, count: entry.count });
-    } catch (_) {}
-  } else if (entry.count >= PROXY_SKIP_THRESHOLD) {
+  if (entry.count >= PROXY_SKIP_THRESHOLD) {
     log.warn('Proxy temporarily deprioritised', { proxyId, count: entry.count });
   }
 }
