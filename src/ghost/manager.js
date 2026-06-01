@@ -86,29 +86,47 @@ function generateFingerprint() {
 // CRUD
 // ----------------------------------------------------------------
 
-function createGhosts(count = 10) {
-  const db  = getDb();
-  const ids = [];
-  const now = new Date().toISOString();
+// platform   : 'youtube' | 'facebook' (extensible)
+// credentials: { email, password } or array thereof — required for Facebook ghosts.
+//              If array, each ghost gets credentials[i % arr.length].
+//              YouTube ghosts are anonymous — credentials can be omitted.
+function createGhosts(count = 10, { platform = 'youtube', credentials = null } = {}) {
+  const db      = getDb();
+  const ids     = [];
+  const now     = new Date().toISOString();
+  const credsArr = Array.isArray(credentials)
+    ? credentials
+    : (credentials ? [credentials] : []);
 
   for (let i = 0; i < count; i++) {
-    const fp     = generateFingerprint();
+    const fp   = generateFingerprint();
+    const cred = credsArr.length ? credsArr[i % credsArr.length] : null;
     const result = db.prepare(
-      `INSERT INTO ghost_profiles (fingerprint_json, status, created_at, updated_at) VALUES (?,?,?,?)`
-    ).run(JSON.stringify(fp), 'cold', now, now);
+      `INSERT INTO ghost_profiles
+         (fingerprint_json, credentials_json, platform, status, created_at, updated_at)
+       VALUES (?,?,?,?,?,?)`
+    ).run(JSON.stringify(fp), cred ? JSON.stringify(cred) : null, platform, 'cold', now, now);
     ids.push(Number(result.lastInsertRowid));
   }
 
-  log.info('Ghosts created', { count: ids.length });
+  log.info('Ghosts created', { count: ids.length, platform });
   return ids;
 }
 
-function getGhosts({ limit = 100, status } = {}) {
-  const where = status ? `WHERE status='${status}'` : '';
-  return getDb().prepare(`SELECT * FROM ghost_profiles ${where} ORDER BY created_at DESC LIMIT ?`).all(limit);
+function getGhosts({ limit = 100, status, platform } = {}) {
+  const db         = getDb();
+  const conditions = [];
+  const args       = [];
+  if (status)   { conditions.push('status=?');   args.push(status);   }
+  if (platform) { conditions.push('platform=?'); args.push(platform); }
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+  return db.prepare(`SELECT * FROM ghost_profiles ${where} ORDER BY created_at DESC LIMIT ?`)
+    .all(...args, limit);
 }
 
-function getStats() {
+function getStats(platform = null) {
+  const where = platform ? 'WHERE platform=?' : '';
+  const args  = platform ? [platform] : [];
   return getDb().prepare(`
     SELECT
       COUNT(*)                                                AS total,
@@ -117,8 +135,8 @@ function getStats() {
       SUM(CASE WHEN status='warming' THEN 1 ELSE 0 END)     AS warming,
       SUM(CASE WHEN status='retired' THEN 1 ELSE 0 END)     AS retired,
       SUM(use_count)                                         AS total_uses
-    FROM ghost_profiles
-  `).get();
+    FROM ghost_profiles ${where}
+  `).get(...args);
 }
 
 function deleteGhost(ghostId) {
@@ -137,19 +155,20 @@ function deleteGhost(ghostId) {
 const MAX_PER_DAY = parseInt(process.env.GHOST_MAX_USES_PER_DAY ?? '8', 10);
 const REST_MINUTES = parseInt(process.env.GHOST_REST_MINUTES ?? '45', 10);
 
-function pickGhost() {
-  const db        = getDb();
-  const today     = new Date().toISOString().slice(0, 10);
+function pickGhost(platform = 'youtube') {
+  const db         = getDb();
+  const today      = new Date().toISOString().slice(0, 10);
   const restCutoff = new Date(Date.now() - REST_MINUTES * 60_000).toISOString();
 
   return db.prepare(`
     SELECT * FROM ghost_profiles
     WHERE status = 'ready'
+    AND platform = ?
     AND (last_used_at IS NULL OR last_used_at < ?)
     AND (today_date IS NULL OR today_date != ? OR use_today < ?)
     ORDER BY last_used_at ASC
     LIMIT 1
-  `).get(restCutoff, today, MAX_PER_DAY) ?? null;
+  `).get(platform, restCutoff, today, MAX_PER_DAY) ?? null;
 }
 
 function recordUse(ghostId) {

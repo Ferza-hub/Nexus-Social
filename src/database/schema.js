@@ -228,7 +228,7 @@ function runMigrations(db) {
   addCol('proxies', 'proxy_type',   `TEXT NOT NULL DEFAULT 'dedicated'`);
   addCol('proxies', 'geo_region',   `TEXT`);
 
-  // Ghost profiles tables
+  // Ghost profiles tables — created here because they depend on proxies table existing
   db.exec(`
     CREATE TABLE IF NOT EXISTS ghost_profiles (
       id                  INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -256,6 +256,10 @@ function runMigrations(db) {
     CREATE INDEX IF NOT EXISTS idx_ghost_profiles_status ON ghost_profiles(status, last_used_at);
     CREATE INDEX IF NOT EXISTS idx_ghost_logs_ghost      ON ghost_logs(ghost_id, created_at);
   `);
+
+  // Ghost profile extensions — additive migrations (must run after CREATE TABLE above)
+  addCol('ghost_profiles', 'platform',         `TEXT NOT NULL DEFAULT 'youtube'`);
+  addCol('ghost_profiles', 'credentials_json', `TEXT`);
 }
 
 module.exports = { runMigrations };

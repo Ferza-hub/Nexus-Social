@@ -427,9 +427,9 @@ const _GHOST_YT_TERMS = [
 function _ri(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
 
 async function executeGhostView(platform, url) {
-  const ghost = gm.pickGhost();
+  const ghost = gm.pickGhost(platform);
   if (!ghost) {
-    log.debug('No ghost available — falling back to anonymous');
+    log.debug('No ghost available — falling back to anonymous', { platform });
     return executeAnonymousView(platform, url);
   }
 
@@ -439,24 +439,41 @@ async function executeGhostView(platform, url) {
     const { page, context } = session;
 
     if (platform === 'youtube') {
-      // Ghost is an anonymous returning visitor — storageState has YouTube cookies.
-      // searchAndWatch with targetUrl: organic search referrer → then land on target.
-      const isShorts  = url.includes('/shorts/');
-      const keyword   = _GHOST_YT_TERMS[_ri(0, _GHOST_YT_TERMS.length - 1)];
-      const watchPct  = isShorts ? (_ri(75, 100) / 100) : (_ri(40, 70) / 100);
+      // Anonymous returning visitor — storageState has YouTube cookies.
+      // Organic path: search random keyword for referrer, then land on target.
+      const isShorts = url.includes('/shorts/');
+      const keyword  = _GHOST_YT_TERMS[_ri(0, _GHOST_YT_TERMS.length - 1)];
+      const watchPct = isShorts ? (_ri(75, 100) / 100) : (_ri(40, 70) / 100);
       await youtube.searchAndWatch(page, keyword, {
         targetUrl: youtube.cleanUrl(url),
         watchPct,
       });
 
     } else if (platform === 'facebook') {
-      // Ghost (no login) can only interact with public video URLs.
-      // watchVideo will attempt anonymous viewing; Facebook may redirect to login
-      // in which case the ghost view fails gracefully and is logged.
-      await facebook.watchVideo(page, url);
+      // Authenticated ghost — storageState contains a live Facebook session.
+      // If the session expired, attempt re-login using stored credentials.
+      let result;
+      if (url) {
+        result = await facebook.watchVideo(page, url);
+      } else {
+        result = await facebook.watchReel(page, { reelCount: _ri(2, 4), maxMs: 90_000 });
+      }
+
+      if (!result.success && result.event === 'login_required' && ghost.credentials_json) {
+        // Session cookie expired — re-authenticate and retry once
+        log.info('Facebook ghost session expired — re-logging in', { ghostId: ghost.id });
+        const creds = JSON.parse(ghost.credentials_json);
+        const loginResult = await facebook.login(page, creds);
+        if (loginResult.success) {
+          if (url) await facebook.watchVideo(page, url);
+          else     await facebook.watchReel(page, { reelCount: _ri(2, 4), maxMs: 90_000 });
+        } else {
+          gm.setStatus(ghost.id, 'cold');
+          throw new Error(`Facebook ghost session expired and re-login failed: ${loginResult.event}`);
+        }
+      }
 
     } else {
-      // Generic platform: set referrer + navigate + scroll + wait
       const refList = _REFERRERS[platform] ?? [null];
       const referer = refList[_ri(0, refList.length - 1)] ?? undefined;
       await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45_000, referer });
