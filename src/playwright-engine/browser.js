@@ -74,6 +74,12 @@ function pick(arr) {
   return arr[Math.floor(Math.random() * arr.length)];
 }
 
+function _chromeInfo(ua) {
+  const ver      = (ua.match(/Chrome\/(\d+)/) ?? [])[1] ?? '124';
+  const platform = /Macintosh/.test(ua) ? 'macOS' : /Linux/.test(ua) ? 'Linux' : 'Windows';
+  return { ver, platform };
+}
+
 function randInt(min, max) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
@@ -100,11 +106,13 @@ function _languagesFromLocale(locale) {
 // ----------------------------------------------------------------
 
 function buildFingerprintScript(seed, viewport, ua, gpuPair, opts = {}) {
-  const platform  = _platformFromUA(ua);
-  const locale    = opts.locale ?? 'en-US';
-  const languages = _languagesFromLocale(locale);
-  const hwConc    = opts.hardwareConcurrency ?? randInt(4, 16);
-  const devMem    = opts.deviceMemory        ?? pick([4, 8, 16]);
+  const platform    = _platformFromUA(ua);
+  const locale      = opts.locale      ?? 'en-US';
+  const languages   = _languagesFromLocale(locale);
+  const hwConc      = opts.hardwareConcurrency ?? randInt(4, 16);
+  const devMem      = opts.deviceMemory        ?? pick([4, 8, 16]);
+  const chromeVer   = opts.chromeVer   ?? '124';
+  const secPlatform = opts.secPlatform ?? 'Windows';
 
   return `
 (function() {
@@ -357,6 +365,27 @@ function buildFingerprintScript(seed, viewport, ua, gpuPair, opts = {}) {
     }
   } catch(_) {}
 
+  // 16. navigator.userAgentData — remove HeadlessChrome brand, match real Chrome
+  try {
+    const _uaBrands = [
+      { brand: 'Chromium',      version: '${chromeVer}' },
+      { brand: 'Google Chrome', version: '${chromeVer}' },
+      { brand: 'Not-A.Brand',   version: '99' },
+    ];
+    const _uaData = {
+      brands:   _uaBrands,
+      mobile:   false,
+      platform: '${secPlatform}',
+      getHighEntropyValues: () => Promise.resolve({
+        brands: _uaBrands, mobile: false, platform: '${secPlatform}',
+        architecture: 'x86', bitness: '64', fullVersionList: _uaBrands,
+        model: '', platformVersion: '10.0.0', uaFullVersion: '${chromeVer}.0.0.0',
+      }),
+      toJSON: () => ({ brands: _uaBrands, mobile: false, platform: '${secPlatform}' }),
+    };
+    Object.defineProperty(navigator, 'userAgentData', { get: () => _uaData, configurable: true });
+  } catch(_) {}
+
 })();
   `;
 }
@@ -482,12 +511,19 @@ async function launchEphemeral() {
   const [locale, acceptLang] = pick(ANON_LOCALES);
   const proxy    = _pickProxy();
 
+  const { ver: chromeVer, platform: secPlatform } = _chromeInfo(ua);
+
   const browser = await chromium.launch(_launchOpts(viewport, proxy));
   const context = await browser.newContext({
     viewport, userAgent: ua, locale, timezoneId: timezone,
-    extraHTTPHeaders: { 'Accept-Language': acceptLang },
+    extraHTTPHeaders: {
+      'Accept-Language':    acceptLang,
+      'sec-ch-ua':          `"Chromium";v="${chromeVer}", "Google Chrome";v="${chromeVer}", "Not-A.Brand";v="99"`,
+      'sec-ch-ua-mobile':   '?0',
+      'sec-ch-ua-platform': `"${secPlatform}"`,
+    },
   });
-  await context.addInitScript(buildFingerprintScript(seed, viewport, ua, gpuPair));
+  await context.addInitScript(buildFingerprintScript(seed, viewport, ua, gpuPair, { chromeVer, secPlatform }));
   const page = await context.newPage();
 
   markBusy(slotId);
@@ -516,9 +552,16 @@ async function launchWithSession(storagePath) {
   const [locale, acceptLang] = pick(ANON_LOCALES);
   const proxy    = _pickProxy();
 
+  const { ver: chromeVer, platform: secPlatform } = _chromeInfo(ua);
+
   const ctxOpts = {
     viewport, userAgent: ua, locale, timezoneId: timezone,
-    extraHTTPHeaders: { 'Accept-Language': acceptLang },
+    extraHTTPHeaders: {
+      'Accept-Language':    acceptLang,
+      'sec-ch-ua':          `"Chromium";v="${chromeVer}", "Google Chrome";v="${chromeVer}", "Not-A.Brand";v="99"`,
+      'sec-ch-ua-mobile':   '?0',
+      'sec-ch-ua-platform': `"${secPlatform}"`,
+    },
   };
 
   if (storagePath) {
@@ -527,7 +570,7 @@ async function launchWithSession(storagePath) {
 
   const browser = await chromium.launch(_launchOpts(viewport, proxy));
   const context = await browser.newContext(ctxOpts);
-  await context.addInitScript(buildFingerprintScript(seed, viewport, ua, gpuPair));
+  await context.addInitScript(buildFingerprintScript(seed, viewport, ua, gpuPair, { chromeVer, secPlatform }));
   const page = await context.newPage();
 
   markBusy(slotId);
