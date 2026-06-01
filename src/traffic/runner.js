@@ -82,8 +82,8 @@ async function runJob(jobId) {
   const logEntry = (status, message) => {
     try {
       db.prepare(
-        `INSERT INTO traffic_logs (job_id, account_id, platform, action, status, message, created_at)
-         VALUES (?,0,?,?,?,?,?)`
+        `INSERT INTO traffic_logs (job_id, platform, action, status, message, created_at)
+         VALUES (?,?,?,?,?,?)`
       ).run(jobId, job.platform, job.action_type, status, message ?? null, new Date().toISOString());
     } catch (_) {}
   };

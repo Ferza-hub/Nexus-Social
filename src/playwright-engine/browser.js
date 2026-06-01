@@ -1,6 +1,7 @@
 'use strict';
 
 const { chromium } = require('playwright');
+const fs           = require('fs');
 const { makeLogger } = require('../utils/logger');
 const { getDb } = require('../database/db');
 
@@ -361,11 +362,8 @@ function buildFingerprintScript(seed, viewport, ua, gpuPair, opts = {}) {
 }
 
 // ----------------------------------------------------------------
-// Launch an anonymous browser (no account, no session)
-// Uses concurrency slot so anon + account browsers share the cap
+// Proxy pool and failure tracking
 // ----------------------------------------------------------------
-
-let _anonSeq = 0;
 
 // Cached residential proxy pool — refreshed every 60 seconds
 let _residentialProxies = null;
@@ -412,101 +410,17 @@ function _isProxyBad(proxyId) {
   return Date.now() - entry.lastAt <= PROXY_SKIP_WINDOW_MS;
 }
 
-// Pick proxy that matches ghost's region (timezone geo) when possible
-// Skips proxies with too many recent failures unless there's no alternative
-function _pickProxyForRegion(region) {
+// Random residential proxy, skipping bad ones
+function _pickProxy() {
   const all = _getResidentialProxies();
   if (!all.length) return null;
-
-  const good     = all.filter(p => !_isProxyBad(p.id));
-  const pool     = good.length > 0 ? good : all;           // fallback to all if every proxy is bad
-  const matching = pool.filter(p => p.geo_region === region);
-  return matching.length > 0 ? pick(matching) : pick(pool);
+  const good = all.filter(p => !_isProxyBad(p.id));
+  return pick(good.length > 0 ? good : all);
 }
 
-async function launchAnonymous() {
-  if (isConcurrencyFull()) {
-    throw new Error(`Concurrent browser limit reached (${MAX_CONCURRENT}). Try again later.`);
-  }
-
-  const anonId = `anon_${++_anonSeq}`;
-  const viewport = pick(DESKTOP_VIEWPORTS);
-  const ua = pick(USER_AGENTS);
-  const gpuPair = pick(GPU_PAIRS);
-  const seed = randInt(100000, 999999999);
-
-  const residentials = _getResidentialProxies();
-  const proxy = residentials.length > 0 ? pick(residentials) : null;
-
-  const launchOptions = {
-    headless: true,
-    args: [
-      '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
-      '--disable-blink-features=AutomationControlled', '--disable-infobars',
-      '--disable-extensions', '--disable-default-apps', '--no-first-run',
-      '--no-default-browser-check', '--disable-features=TranslateUI,VizDisplayCompositor',
-      '--disable-ipc-flooding-protection', '--password-store=basic', '--use-mock-keychain',
-      `--window-size=${viewport.width},${viewport.height}`,
-    ],
-  };
-
-  if (proxy) {
-    launchOptions.proxy = {
-      server:   `${proxy.protocol}://${proxy.host}:${proxy.port}`,
-      username: proxy.username ?? undefined,
-      password: proxy.password ?? undefined,
-    };
-  }
-
-  const timezone = pick(ANON_TIMEZONES);
-  const [locale, acceptLang] = pick(ANON_LOCALES);
-
-  const browser = await chromium.launch(launchOptions);
-  const context = await browser.newContext({
-    viewport,
-    userAgent: ua,
-    locale,
-    timezoneId: timezone,
-    extraHTTPHeaders: { 'Accept-Language': acceptLang },
-  });
-  await context.addInitScript(buildFingerprintScript(seed, viewport, ua, gpuPair));
-  const page = await context.newPage();
-
-  markBusy(anonId);
-  log.info('Launched anonymous browser', { proxy: proxy ? `${proxy.host}:${proxy.port}` : 'datacenter' });
-
-  return {
-    browser, context, page,
-    proxyId: proxy?.id ?? null,
-    cleanup: async () => {
-      try { await browser.close(); } finally { markFree(anonId); }
-    },
-  };
-}
-
-// ----------------------------------------------------------------
-// Launch browser as a specific ghost
-// Ghost identity: fixed fingerprint + persistent storageState
-// Proxy: random residential from pool (not fixed to ghost)
-// ----------------------------------------------------------------
-
-async function launchWithGhost(ghostId) {
-  if (isConcurrencyFull()) {
-    throw new Error(`Concurrent browser limit reached (${MAX_CONCURRENT}). Try again later.`);
-  }
-
-  const gm    = require('../ghost/manager');
-  const ghost = getDb().prepare('SELECT * FROM ghost_profiles WHERE id=?').get(ghostId);
-  if (!ghost) throw new Error(`Ghost ${ghostId} not found`);
-
-  const fp = JSON.parse(ghost.fingerprint_json);
-
-  // Pick proxy that matches ghost's geo region (timezone)
-  const proxy = _pickProxyForRegion(fp.region ?? null);
-
-  const slotId = `ghost_${ghostId}`;
-
-  const launchOptions = {
+// Shared launch-options builder
+function _launchOpts(viewport, proxy) {
+  const opts = {
     headless: true,
     args: [
       '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
@@ -516,65 +430,102 @@ async function launchWithGhost(ghostId) {
       '--disable-ipc-flooding-protection', '--password-store=basic', '--use-mock-keychain',
       '--disable-rtc-smoothness-algorithm', '--disable-webrtc-hw-encoding',
       '--disable-webrtc-hw-decoding', '--enforce-webrtc-ip-permission-check',
-      `--window-size=${fp.viewport.width},${fp.viewport.height}`,
+      `--window-size=${viewport.width},${viewport.height}`,
     ],
   };
-
   if (proxy) {
-    launchOptions.proxy = {
+    opts.proxy = {
       server:   `${proxy.protocol}://${proxy.host}:${proxy.port}`,
       username: proxy.username ?? undefined,
       password: proxy.password ?? undefined,
     };
   }
+  return opts;
+}
 
-  const gpuPair      = [fp.gpuVendor, fp.gpuRenderer];
-  const storageState = gm.loadStorageState(ghostId);
-
-  const browser  = await chromium.launch(launchOptions);
-  const ctxOpts  = {
-    viewport:    fp.viewport,
-    userAgent:   fp.userAgent,
-    locale:      fp.locale,
-    timezoneId:  fp.timezone,
-    extraHTTPHeaders: { 'Accept-Language': fp.acceptLanguage },
-  };
-  if (storageState) ctxOpts.storageState = storageState;
-
-  const context = await browser.newContext(ctxOpts);
-  await context.addInitScript(buildFingerprintScript(fp.canvasSeed, fp.viewport, fp.userAgent, gpuPair, {
-    locale:              fp.locale,
-    hardwareConcurrency: fp.hardwareConcurrency,
-    deviceMemory:        fp.deviceMemory,
-    connectionType:      fp.connectionType ?? 'wifi',
-    batteryBase:         fp.batteryBase    ?? 0.65,
-  }));
-  const page = await context.newPage();
-
-  markBusy(slotId);
-  log.info('Ghost browser launched', {
-    ghostId,
-    proxy: proxy ? `${proxy.host}:${proxy.port}` : 'datacenter',
-  });
-
-  // Robust cleanup: force-kills the browser process if close() hangs
-  const cleanup = async () => {
+// Shared cleanup factory
+function _makeCleanup(browser, slotId) {
+  return async () => {
     try {
-      await Promise.race([
-        browser.close(),
-        new Promise(r => setTimeout(r, 8_000)), // 8s max to close gracefully
-      ]);
+      await Promise.race([browser.close(), new Promise(r => setTimeout(r, 8_000))]);
     } catch (_) {}
-    try { browser.process()?.kill(); } catch (_) {} // force-kill if still alive
+    try { browser.process()?.kill(); } catch (_) {}
     markFree(slotId);
-    log.debug('Ghost browser closed', { ghostId });
-  };
-
-  return {
-    browser, context, page, ghost,
-    proxyId: proxy?.id ?? null,
-    cleanup,
   };
 }
 
-module.exports = { launchAnonymous, launchWithGhost, isConcurrencyFull, recordProxyFailure };
+let _seq = 0;
+
+// ----------------------------------------------------------------
+// launchEphemeral — fresh browser, random fingerprint, no history.
+// Born for a single task; dies when cleanup() is called.
+// Used by executeGhostView.
+// ----------------------------------------------------------------
+
+async function launchEphemeral() {
+  if (isConcurrencyFull()) throw new Error(`Concurrency limit reached (${MAX_CONCURRENT})`);
+
+  const slotId   = `ghost_${++_seq}`;
+  const viewport = pick(DESKTOP_VIEWPORTS);
+  const ua       = pick(USER_AGENTS);
+  const gpuPair  = pick(GPU_PAIRS);
+  const seed     = randInt(100_000, 999_999_999);
+  const timezone = pick(ANON_TIMEZONES);
+  const [locale, acceptLang] = pick(ANON_LOCALES);
+  const proxy    = _pickProxy();
+
+  const browser = await chromium.launch(_launchOpts(viewport, proxy));
+  const context = await browser.newContext({
+    viewport, userAgent: ua, locale, timezoneId: timezone,
+    extraHTTPHeaders: { 'Accept-Language': acceptLang },
+  });
+  await context.addInitScript(buildFingerprintScript(seed, viewport, ua, gpuPair));
+  const page = await context.newPage();
+
+  markBusy(slotId);
+  log.info('Ephemeral ghost launched', { proxy: proxy ? `${proxy.host}:${proxy.port}` : 'datacenter' });
+
+  return { browser, context, page, proxyId: proxy?.id ?? null, cleanup: _makeCleanup(browser, slotId) };
+}
+
+// ----------------------------------------------------------------
+// launchWithSession — ephemeral browser loaded with a key account's
+// saved session file.  The account is authenticated; the browser
+// identity (fingerprint, proxy) is still random.
+// Browser state is NOT saved back — session file stays as-is.
+// Used by executeGhostAction.
+// ----------------------------------------------------------------
+
+async function launchWithSession(storagePath) {
+  if (isConcurrencyFull()) throw new Error(`Concurrency limit reached (${MAX_CONCURRENT})`);
+
+  const slotId   = `keyed_${++_seq}`;
+  const viewport = pick(DESKTOP_VIEWPORTS);
+  const ua       = pick(USER_AGENTS);
+  const gpuPair  = pick(GPU_PAIRS);
+  const seed     = randInt(100_000, 999_999_999);
+  const timezone = pick(ANON_TIMEZONES);
+  const [locale, acceptLang] = pick(ANON_LOCALES);
+  const proxy    = _pickProxy();
+
+  const ctxOpts = {
+    viewport, userAgent: ua, locale, timezoneId: timezone,
+    extraHTTPHeaders: { 'Accept-Language': acceptLang },
+  };
+
+  if (storagePath) {
+    try { ctxOpts.storageState = JSON.parse(fs.readFileSync(storagePath, 'utf8')); } catch (_) {}
+  }
+
+  const browser = await chromium.launch(_launchOpts(viewport, proxy));
+  const context = await browser.newContext(ctxOpts);
+  await context.addInitScript(buildFingerprintScript(seed, viewport, ua, gpuPair));
+  const page = await context.newPage();
+
+  markBusy(slotId);
+  log.info('Keyed ghost launched', { proxy: proxy ? `${proxy.host}:${proxy.port}` : 'datacenter' });
+
+  return { browser, context, page, proxyId: proxy?.id ?? null, cleanup: _makeCleanup(browser, slotId) };
+}
+
+module.exports = { launchEphemeral, launchWithSession, isConcurrencyFull, recordProxyFailure };
