@@ -178,9 +178,15 @@ function setStatus(ghostId, status) {
 function saveStorageState(ghostId, state) {
   const filePath = path.join(STORAGE_DIR, `ghost_${ghostId}.json`);
   fs.writeFileSync(filePath, JSON.stringify(state));
+  const now = new Date().toISOString();
+  // Set last_used_at = NOW so REST_MINUTES cooldown applies before first view.
+  // Ghost just finished a warmup session — treat it as a "use" to avoid
+  // two rapid YouTube sessions from the same browser identity.
   getDb().prepare(
-    `UPDATE ghost_profiles SET storage_state_path=?, status='ready', warmup_done=1, updated_at=? WHERE id=?`
-  ).run(filePath, new Date().toISOString(), ghostId);
+    `UPDATE ghost_profiles
+     SET storage_state_path=?, status='ready', warmup_done=1, last_used_at=?, updated_at=?
+     WHERE id=?`
+  ).run(filePath, now, now, ghostId);
 }
 
 function loadStorageState(ghostId) {
