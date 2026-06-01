@@ -660,12 +660,23 @@ async function launchWithGhost(ghostId) {
     proxy: proxy ? `${proxy.host}:${proxy.port}` : 'datacenter',
   });
 
+  // Robust cleanup: force-kills the browser process if close() hangs
+  const cleanup = async () => {
+    try {
+      await Promise.race([
+        browser.close(),
+        new Promise(r => setTimeout(r, 8_000)), // 8s max to close gracefully
+      ]);
+    } catch (_) {}
+    try { browser.process()?.kill(); } catch (_) {} // force-kill if still alive
+    markFree(slotId);
+    log.debug('Ghost browser closed', { ghostId });
+  };
+
   return {
     browser, context, page, ghost,
     proxyId: proxy?.id ?? null,
-    cleanup: async () => {
-      try { await browser.close(); } finally { markFree(slotId); }
-    },
+    cleanup,
   };
 }
 

@@ -6,8 +6,11 @@ const gm = require('./manager');
 
 const log = makeLogger('GhostWarmer');
 
-const MAX_WARMUP_ATTEMPTS = parseInt(process.env.GHOST_WARMUP_RETRIES     ?? '3', 10);
-const WARMUP_CONCURRENCY  = parseInt(process.env.GHOST_WARMUP_CONCURRENCY ?? '2', 10);
+const MAX_WARMUP_ATTEMPTS  = parseInt(process.env.GHOST_WARMUP_RETRIES      ?? '3',      10);
+const WARMUP_CONCURRENCY   = parseInt(process.env.GHOST_WARMUP_CONCURRENCY  ?? '2',      10);
+// Hard wall-clock limit per attempt — fires even if Playwright hangs at socket level.
+// Proxy CONNECT tunnels can stall indefinitely; page.goto timeout alone is not enough.
+const ATTEMPT_HARD_TIMEOUT = parseInt(process.env.GHOST_ATTEMPT_TIMEOUT_MS  ?? '90000',  10);
 
 function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
 function randInt(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
@@ -61,14 +64,16 @@ async function warmupGhost(ghostId) {
     let session = null;
     let proxyId = null;
 
-    try {
+    // Hard wall-clock timeout — fires even if Playwright is stuck at socket level.
+    // We keep `session` in the outer scope so cleanup can run after the race.
+    const attemptWork = async () => {
       session = await launchWithGhost(ghostId);
       proxyId = session.proxyId ?? null;
       const { page, context } = session;
 
       // ── Step 1: Land on YouTube, collect base cookies ──────────────
       await page.goto('https://www.youtube.com/', {
-        waitUntil: 'domcontentloaded', timeout: 45_000,
+        waitUntil: 'domcontentloaded', timeout: 40_000,
       });
       await delay(randInt(2000, 4000));
 
@@ -99,7 +104,7 @@ async function warmupGhost(ghostId) {
           const isPaused = await page.evaluate(() => document.querySelector('video')?.paused ?? true).catch(() => true);
           if (isPaused) await page.click('#movie_player, video').catch(() => {});
 
-          await delay(randInt(15_000, 35_000));
+          await delay(randInt(15_000, 25_000)); // 15-25s (was 35s — keep within hard timeout)
 
           await page.mouse.wheel(0, randInt(200, 500));
           await delay(randInt(1500, 3000));
@@ -120,22 +125,31 @@ async function warmupGhost(ghostId) {
         await page.keyboard.press('Enter');
         await delay(randInt(3000, 5000));
         await page.mouse.wheel(0, randInt(200, 500));
-        await delay(randInt(2000, 3000));
+        await delay(randInt(1500, 2500));
       } catch (_) {}
 
       // ── Save the ghost's soul ───────────────────────────────────────
       const state = await context.storageState();
       gm.saveStorageState(ghostId, state);
       gm.logAction(ghostId, 'youtube', 'warmup', 'success');
+    };
+
+    try {
+      await Promise.race([
+        attemptWork(),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error(`Hard timeout ${ATTEMPT_HARD_TIMEOUT}ms`)), ATTEMPT_HARD_TIMEOUT)
+        ),
+      ]);
 
       log.info('Ghost ready', { ghostId, attempt });
       return { success: true };
 
     } catch (err) {
-      const isNetErr = /timeout|net::/i.test(err.message);
+      const isNetErr = /timeout|net::|ECONNREFUSED|ECONNRESET|ERR_/i.test(err.message);
       log.warn(`Warmup attempt ${attempt}/${MAX_WARMUP_ATTEMPTS} failed`, { ghostId, err: err.message });
 
-      // Penalise the proxy that caused a network-level failure
+      // Penalise the proxy that caused a network/timeout failure
       if (proxyId && isNetErr) recordProxyFailure(proxyId);
 
       if (attempt >= MAX_WARMUP_ATTEMPTS) {
@@ -145,11 +159,12 @@ async function warmupGhost(ghostId) {
       }
       // Exponential backoff before retry — cleanup happens in finally first
     } finally {
+      // cleanup() force-kills the browser process even if it's stuck
       if (session) await session.cleanup().catch(() => {});
     }
 
-    // Backoff runs after finally (after browser is closed)
-    await delay(attempt * randInt(4000, 7000));
+    // Backoff runs after finally (browser already killed)
+    await delay(attempt * randInt(3000, 6000));
   }
 }
 
