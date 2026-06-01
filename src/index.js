@@ -2,11 +2,9 @@
 
 require('dotenv').config();
 const { getDb, closeDb } = require('./database/db');
-const { runMigrations } = require('./database/schema');
-const { startMonitor } = require('./account-manager/health-monitor');
-const { startRunner }  = require('./api-engine/scheduler/runner');
-const { startPanel }   = require('./panel/server');
-const { makeLogger }   = require('./utils/logger');
+const { runMigrations }  = require('./database/schema');
+const { startPanel }     = require('./panel/server');
+const { makeLogger }     = require('./utils/logger');
 
 const log = makeLogger('Nexus');
 
@@ -17,10 +15,7 @@ function main() {
   runMigrations(db);
   log.info('Database ready.');
 
-  startMonitor();   // Phase 1.5 — health cron every 30min
-  startRunner();    // Phase 3.3 — post queue + campaign runner
-  startPanel();     // Phase 4   — web panel
-
+  startPanel();
   log.info('All systems up.');
 }
 
