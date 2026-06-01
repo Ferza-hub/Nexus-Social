@@ -163,8 +163,6 @@ async function executeGhostView(platform, url) {
     session = await launchEphemeral();
     const { page, proxyId } = session;
 
-    await _quickEntry(page, platform);
-
     const watchMs = _ri(15_000, 60_000);
 
     if (platform === 'youtube') {
