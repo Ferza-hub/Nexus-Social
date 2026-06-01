@@ -243,7 +243,7 @@ async function watchReel(page, { reelCount = null, maxMs = null } = {}) {
 //    Watches a specific Facebook video post to X% of actual duration.
 // ----------------------------------------------------------------
 
-async function watchVideo(page, videoUrl) {
+async function watchVideo(page, videoUrl, { watchMs: watchMsOverride = null } = {}) {
   log.debug('watchVideo', { videoUrl });
 
   await page.goto(videoUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
@@ -257,15 +257,19 @@ async function watchVideo(page, videoUrl) {
   await _ensurePlaying(page);
   await h.delay(h.randInt(1000, 2000)); // let it buffer
 
-  const duration = await _getDuration(page);
-  const pct      = h.randInt(55, 85) / 100;
   let watchMs;
-  if (duration) {
-    watchMs = Math.round(duration * pct * 1000);
-    watchMs = Math.min(watchMs, 300_000);
-    watchMs = Math.max(watchMs, 15_000);
+  if (watchMsOverride !== null) {
+    watchMs = watchMsOverride;
   } else {
-    watchMs = h.randInt(20_000, 90_000);
+    const duration = await _getDuration(page);
+    const pct      = h.randInt(55, 85) / 100;
+    if (duration) {
+      watchMs = Math.round(duration * pct * 1000);
+      watchMs = Math.min(watchMs, 300_000);
+      watchMs = Math.max(watchMs, 15_000);
+    } else {
+      watchMs = h.randInt(20_000, 90_000);
+    }
   }
 
   log.debug('Watch plan', { duration, pct, watchMs });

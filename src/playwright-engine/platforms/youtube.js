@@ -208,7 +208,7 @@ async function login(page, account) {
 //    clickThrough=true skips navigation (already on the video page).
 // ----------------------------------------------------------------
 
-async function watchVideo(page, videoUrl, { watchPct = null, clickThrough = false } = {}) {
+async function watchVideo(page, videoUrl, { watchPct = null, watchMs: watchMsOverride = null, clickThrough = false } = {}) {
   log.debug('watchVideo', { videoUrl, clickThrough });
 
   if (!clickThrough) {
@@ -224,16 +224,19 @@ async function watchVideo(page, videoUrl, { watchPct = null, clickThrough = fals
 
   await _ensurePlaying(page);
 
-  // Actual duration → calculate watch target
-  const duration = await _getDuration(page);
-  const pct      = watchPct ?? (h.randInt(45, 80) / 100);
   let watchMs;
-  if (duration) {
-    watchMs = Math.round(duration * pct * 1000);
-    watchMs = Math.min(watchMs, 300_000);   // cap: 5 min
-    watchMs = Math.max(watchMs, 15_000);    // floor: 15 s
+  if (watchMsOverride !== null) {
+    watchMs = watchMsOverride;
   } else {
-    watchMs = h.randInt(20_000, 90_000);
+    const duration = await _getDuration(page);
+    const pct      = watchPct ?? (h.randInt(45, 80) / 100);
+    if (duration) {
+      watchMs = Math.round(duration * pct * 1000);
+      watchMs = Math.min(watchMs, 300_000);
+      watchMs = Math.max(watchMs, 15_000);
+    } else {
+      watchMs = h.randInt(20_000, 90_000);
+    }
   }
 
   log.debug('Watch plan', { duration, pct, watchMs });
