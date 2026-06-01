@@ -243,10 +243,12 @@ async function watchReel(page, { reelCount = null, maxMs = null } = {}) {
 //    Watches a specific Facebook video post to X% of actual duration.
 // ----------------------------------------------------------------
 
-async function watchVideo(page, videoUrl, { watchMs: watchMsOverride = null } = {}) {
+async function watchVideo(page, videoUrl, { watchMs: watchMsOverride = null, referer = null } = {}) {
   log.debug('watchVideo', { videoUrl });
 
-  await page.goto(videoUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
+  const gotoOpts = { waitUntil: 'domcontentloaded', timeout: 25000 };
+  if (referer) gotoOpts.referer = referer;
+  await page.goto(videoUrl, gotoOpts);
   await h.waitForLoad(page);
   await h.preAction();
   await _dismissPopups(page);

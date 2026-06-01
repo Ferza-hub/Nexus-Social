@@ -208,11 +208,13 @@ async function login(page, account) {
 //    clickThrough=true skips navigation (already on the video page).
 // ----------------------------------------------------------------
 
-async function watchVideo(page, videoUrl, { watchPct = null, watchMs: watchMsOverride = null, clickThrough = false } = {}) {
+async function watchVideo(page, videoUrl, { watchPct = null, watchMs: watchMsOverride = null, clickThrough = false, referer = null } = {}) {
   log.debug('watchVideo', { videoUrl, clickThrough });
 
   if (!clickThrough) {
-    await page.goto(videoUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
+    const gotoOpts = { waitUntil: 'domcontentloaded', timeout: 25000 };
+    if (referer) gotoOpts.referer = referer;
+    await page.goto(videoUrl, gotoOpts);
     await h.waitForLoad(page);
     await h.preAction();
   }

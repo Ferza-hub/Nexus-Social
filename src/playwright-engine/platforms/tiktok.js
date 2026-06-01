@@ -91,10 +91,12 @@ async function login(page, account) {
 // 2. watchVideo — watch a video for a random percentage of duration
 // ----------------------------------------------------------------
 
-async function watchVideo(page, videoUrl) {
+async function watchVideo(page, videoUrl, { referer = null } = {}) {
   log.debug('Watching video', { videoUrl });
 
-  await page.goto(videoUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
+  const gotoOpts = { waitUntil: 'domcontentloaded', timeout: 20000 };
+  if (referer) gotoOpts.referer = referer;
+  await page.goto(videoUrl, gotoOpts);
   await h.waitForLoad(page);
   await h.preAction();
 

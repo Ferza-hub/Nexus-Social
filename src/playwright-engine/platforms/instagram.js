@@ -422,10 +422,12 @@ async function commentPost(page, postUrl, text) {
 // 8. watchReel
 // ----------------------------------------------------------------
 
-async function watchReel(page, reelUrl) {
+async function watchReel(page, reelUrl, { referer = null } = {}) {
   log.debug('Watching reel', { reelUrl });
 
-  await page.goto(reelUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
+  const gotoOpts = { waitUntil: 'domcontentloaded', timeout: 20000 };
+  if (referer) gotoOpts.referer = referer;
+  await page.goto(reelUrl, gotoOpts);
   await h.waitForLoad(page);
   await h.preAction();
 

@@ -90,32 +90,70 @@ function _saveSession(accountId, state) {
 }
 
 // ----------------------------------------------------------------
-// Quick platform entry — one homepage visit to pick up cookies and
-// set a referrer chain before hitting the target URL.
-// Kept to 2-4 seconds: ghost rotation + diverse fingerprints is
-// the organic signal; per-ghost history building is not needed.
+// ----------------------------------------------------------------
+// Social referrer pool — weighted per platform to match real
+// traffic distribution. Set as Referer header on first navigation;
+// zero extra page loads, platform sees organic share traffic.
+//
+// Weights reflect: WhatsApp/Telegram (mobile share) dominate for
+// short-form content; Google leads for YouTube; FB wrapper for FB.
 // ----------------------------------------------------------------
 
-const _PLATFORM_HOMES = {
-  youtube:   'https://www.youtube.com/',
-  facebook:  'https://www.facebook.com/',
-  instagram: 'https://www.instagram.com/',
-  tiktok:    'https://www.tiktok.com/',
-  twitter:   'https://x.com/',
-  threads:   'https://www.threads.net/',
+const _REFERRERS = {
+  youtube: [
+    { url: 'https://www.google.com/',     w: 30 },
+    { url: null,                           w: 20 }, // direct
+    { url: 'https://web.whatsapp.com/',   w: 20 },
+    { url: 'https://www.facebook.com/',   w: 15 },
+    { url: 'https://web.telegram.org/',   w: 10 },
+    { url: 'https://x.com/',              w:  5 },
+  ],
+  facebook: [
+    { url: 'https://web.whatsapp.com/',   w: 30 },
+    { url: 'https://l.facebook.com/',     w: 25 },
+    { url: null,                           w: 20 },
+    { url: 'https://web.telegram.org/',   w: 15 },
+    { url: 'https://www.google.com/',     w: 10 },
+  ],
+  instagram: [
+    { url: 'https://web.whatsapp.com/',   w: 35 },
+    { url: null,                           w: 25 },
+    { url: 'https://web.telegram.org/',   w: 20 },
+    { url: 'https://l.facebook.com/',     w: 15 },
+    { url: 'https://www.google.com/',     w:  5 },
+  ],
+  tiktok: [
+    { url: 'https://web.whatsapp.com/',   w: 30 },
+    { url: null,                           w: 30 },
+    { url: 'https://web.telegram.org/',   w: 20 },
+    { url: 'https://www.facebook.com/',   w: 10 },
+    { url: 'https://x.com/',              w: 10 },
+  ],
+  twitter: [
+    { url: 'https://x.com/',              w: 30 },
+    { url: null,                           w: 25 },
+    { url: 'https://web.whatsapp.com/',   w: 20 },
+    { url: 'https://www.google.com/',     w: 15 },
+    { url: 'https://web.telegram.org/',   w: 10 },
+  ],
+  threads: [
+    { url: 'https://web.whatsapp.com/',   w: 30 },
+    { url: null,                           w: 25 },
+    { url: 'https://l.facebook.com/',     w: 25 },
+    { url: 'https://web.telegram.org/',   w: 20 },
+  ],
 };
+
+function _pickReferrer(platform) {
+  const pool  = _REFERRERS[platform] ?? [{ url: null, w: 1 }];
+  const total = pool.reduce((s, e) => s + e.w, 0);
+  let r = Math.random() * total;
+  for (const entry of pool) { r -= entry.w; if (r <= 0) return entry.url; }
+  return null;
+}
 
 function _ri(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
 function _delay(ms)    { return new Promise(r => setTimeout(r, ms)); }
-
-async function _quickEntry(page, platform) {
-  const home = _PLATFORM_HOMES[platform];
-  if (!home) return;
-  try {
-    await page.goto(home, { waitUntil: 'domcontentloaded', timeout: 10_000 });
-    await _delay(_ri(1_500, 3_000));
-  } catch (_) {}
-}
 
 // ----------------------------------------------------------------
 // _checkLoggedIn — navigate to platform and verify session
@@ -163,18 +201,21 @@ async function executeGhostView(platform, url) {
     session = await launchEphemeral();
     const { page, proxyId } = session;
 
-    const watchMs = _ri(15_000, 60_000);
+    const watchMs  = _ri(15_000, 60_000);
+    const referrer = _pickReferrer(platform);
 
     if (platform === 'youtube') {
-      await youtube.watchVideo(page, youtube.cleanUrl(url), { watchMs });
+      await youtube.watchVideo(page, youtube.cleanUrl(url), { watchMs, referer: referrer });
     } else if (platform === 'facebook') {
-      await facebook.watchVideo(page, url, { watchMs });
+      await facebook.watchVideo(page, url, { watchMs, referer: referrer });
     } else if (platform === 'instagram') {
-      await instagram.watchReel(page, url);
+      await instagram.watchReel(page, url, { referer: referrer });
     } else if (platform === 'tiktok') {
-      await tiktok.watchVideo(page, url);
+      await tiktok.watchVideo(page, url, { referer: referrer });
     } else {
-      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+      const gotoOpts = { waitUntil: 'domcontentloaded', timeout: 30_000 };
+      if (referrer) gotoOpts.referer = referrer;
+      await page.goto(url, gotoOpts);
       await _delay(watchMs);
     }
 
