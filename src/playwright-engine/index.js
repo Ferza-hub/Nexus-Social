@@ -201,8 +201,17 @@ async function executeGhostView(platform, url) {
     session = await launchEphemeral();
     const { page, proxyId } = session;
 
-    const watchMs  = _ri(15_000, 60_000);
     const referrer = _pickReferrer(platform);
+
+    // Platform-specific minimum watch time to register as a counted view:
+    // YouTube regular: 30s minimum (YouTube's threshold)
+    // Facebook video:  10s minimum (Meta counts at 10s for "ThruPlay")
+    // TikTok/Instagram/others: 3-5s threshold, 15s+ to be safe
+    const watchMs = platform === 'youtube'
+      ? _ri(30_000, 60_000)
+      : platform === 'facebook'
+        ? _ri(15_000, 45_000)
+        : _ri(15_000, 45_000);
 
     if (platform === 'youtube') {
       await youtube.watchVideo(page, youtube.cleanUrl(url), { watchMs, referer: referrer });
