@@ -4,68 +4,138 @@ const { makeLogger } = require('../../utils/logger');
 const h = require('../human');
 
 const log = makeLogger('YouTube');
-
 const BASE_URL = 'https://www.youtube.com';
 
 // ----------------------------------------------------------------
-// Selector registry
+// Selectors
 // ----------------------------------------------------------------
 
 const SEL = {
-  // Google login flow
-  sign_in_link:     'a[href*="accounts.google.com"], ytd-button-renderer a[href*="accounts.google"]',
-  email_input:      'input[type="email"]',
-  email_next:       '#identifierNext',
-  password_input:   'input[type="password"]',
-  password_next:    '#passwordNext',
-  // 2FA / challenge
-  otp_input:        'input[id="totpPin"], input[aria-label*="code"]',
-  otp_next:         '#totpNext, button:has-text("Next")',
+  avatar:           '#avatar-btn, #avatar-container',
 
-  // Video page
-  like_button:      'ytd-like-button-renderer button[aria-label*="like this"], ytd-segmented-like-dislike-button-renderer button[aria-label*="like"]',
-  liked_state:      'ytd-like-button-renderer button[aria-pressed="true"], ytd-toggle-button-renderer[is-toggled]',
-  subscribe_button: '#subscribe-button button, ytd-subscribe-button-renderer button:not([aria-label*="Subscribed"])',
+  // Popups
+  consent_accept:   'button[aria-label="Accept all"]',
+  consent_eom:      '.eom-buttons button:first-child',
+  dismiss:          '#dismiss-button, paper-button[dialog-dismiss], tp-yt-paper-button[aria-label="No thanks"]',
+  age_gate:         'button:has-text("I understand and wish to proceed")',
+
+  // Player
+  video_el:         'video',
+  movie_player:     '#movie_player',
+
+  // Like
+  like_btn:         'ytd-like-button-renderer button[aria-label*="like"], ytd-segmented-like-dislike-button-renderer button[aria-label*="like"]',
+  liked_state:      'ytd-like-button-renderer button[aria-pressed="true"]',
+
+  // Subscribe
+  subscribe_btn:    '#subscribe-button button:not([aria-label*="Subscribed"]), ytd-subscribe-button-renderer button:not([aria-label*="Subscribed"])',
   subscribed_state: '#subscribe-button button[aria-label*="Subscribed"], ytd-subscribe-button-renderer button[aria-label*="Subscribed"]',
-  // Confirm unsubscribe dialog
-  confirm_unsub:    'yt-button-renderer[dialog-confirm] button, tp-yt-paper-dialog button:has-text("Unsubscribe")',
+  notif_skip:       'ytd-popup-container button[aria-label*="No thanks"], yt-icon-button.notification-pref-button',
 
   // Comments
-  comment_section:  'ytd-comments#comments',
-  comment_box:      '#contenteditable-root[contenteditable="true"], #placeholder-area',
+  comment_box:      '#contenteditable-root[contenteditable="true"]',
   comment_submit:   '#submit-button',
-  sort_comments:    'yt-sort-filter-sub-menu-renderer',
-
-  // Share
-  share_button:     'button[aria-label="Share"], ytd-button-renderer button:has-text("Share")',
-  share_copy_link:  'button[aria-label="Copy link"], yt-copy-link-renderer button',
-
-  // Feed
-  video_renderer:   'ytd-rich-item-renderer, ytd-compact-video-renderer',
-  video_link:       'a#video-title',
 
   // Search
-  search_input:     'input#search',
-  search_submit:    'button#search-icon-legacy',
+  search_input:     'input[name="search_query"], input#search',
+  search_results:   'ytd-video-renderer a#video-title, ytd-video-renderer h3 a[href*="watch"]',
+
+  // Feed
+  feed_video:       'ytd-rich-item-renderer',
 };
 
+const POPUP_SELS = [
+  SEL.consent_accept,
+  SEL.consent_eom,
+  SEL.dismiss,
+  SEL.age_gate,
+];
+
 // ----------------------------------------------------------------
-// Detection
+// Helpers
 // ----------------------------------------------------------------
 
 async function checkForDetection(page) {
   const url  = page.url();
   const text = await page.evaluate(() => document.body?.innerText ?? '').catch(() => '');
-
   if (url.includes('accounts.google.com/signin/v2/challenge')) return 'challenge';
-  if (text.includes('This account has been suspended') || text.includes('disabled')) return 'disabled';
-  if (text.includes('quota') || text.includes('Too many requests')) return 'action_block';
-  if (url.includes('/sorry/') || text.includes('unusual traffic')) return 'challenge';
+  if (text.includes('account has been suspended') || text.includes('account has been disabled')) return 'disabled';
+  if (text.includes('Too many requests') || text.includes('quota exceeded'))  return 'action_block';
+  if (url.includes('/sorry/') || text.includes('unusual traffic'))           return 'challenge';
   return null;
 }
 
+async function _dismissPopups(page) {
+  for (const sel of POPUP_SELS) {
+    try {
+      const el = await page.$(sel);
+      if (el) { await el.click(); await h.delay(600); }
+    } catch (_) {}
+  }
+}
+
+// Actual video duration from <video> element; returns seconds or null
+async function _getDuration(page) {
+  return page.evaluate(() => {
+    const d = document.querySelector('video')?.duration;
+    return (d && isFinite(d) && d > 5) ? d : null;
+  }).catch(() => null);
+}
+
+// Click player centre or press 'k' to start playback
+async function _ensurePlaying(page) {
+  try {
+    await page.waitForSelector(SEL.video_el, { timeout: 8000 });
+    const isPaused = await page.evaluate(() => document.querySelector('video')?.paused ?? true);
+    if (!isPaused) return;
+    const player = await page.$(SEL.movie_player);
+    const box    = player ? await player.boundingBox() : null;
+    if (box) {
+      await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    } else {
+      await page.keyboard.press('k');
+    }
+    await h.delay(h.randInt(500, 1000));
+  } catch (_) {}
+}
+
+// Watch for `watchMs` ms with natural pause/resume + mouse idle
+async function _watchSegmented(page, watchMs) {
+  const segments = h.randInt(3, 6);
+  const segMs    = Math.floor(watchMs / segments);
+  const vp       = page.viewportSize() ?? { width: 1366, height: 768 };
+
+  for (let seg = 0; seg < segments; seg++) {
+    await h.delay(segMs);
+
+    // Natural pause (25% chance, not on last segment)
+    if (seg < segments - 1 && Math.random() < 0.25) {
+      await page.keyboard.press('k');                      // pause
+      await h.delay(h.randInt(2000, 7000));
+      await page.keyboard.press('k');                      // resume
+    }
+
+    // Idle mouse movement (40% chance)
+    if (Math.random() < 0.4) {
+      await page.mouse.move(
+        h.randInt(80, vp.width - 80),
+        h.randInt(80, vp.height - 80),
+        { steps: h.randInt(5, 15) },
+      );
+    }
+
+    // At ~60% mark: peek at comments, then scroll back up
+    if (seg === Math.floor(segments * 0.6) && Math.random() < 0.35) {
+      await h.humanScroll(page, { scrolls: h.randInt(2, 4) });
+      await h.delay(h.randInt(1500, 3500));
+      await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'smooth' }));
+      await h.delay(h.randInt(600, 1200));
+    }
+  }
+}
+
 // ----------------------------------------------------------------
-// 1. login — Google account login via YouTube sign-in flow
+// 1. login — Google / YouTube sign-in
 // ----------------------------------------------------------------
 
 async function login(page, account) {
@@ -75,15 +145,14 @@ async function login(page, account) {
   await h.waitForLoad(page);
   await h.preAction();
 
-  // Check if already logged in (avatar appears)
-  const avatar = await page.$('button#avatar-btn, #avatar-container');
-  if (avatar) {
+  // Already logged in?
+  if (await page.$(SEL.avatar)) {
     log.info('Already logged in', { username: account.email ?? account.username });
     return { success: true };
   }
 
-  // Click "Sign in"
-  const signInLink = page.locator(SEL.sign_in_link).first();
+  // Navigate to sign-in
+  const signInLink = page.locator('a[href*="accounts.google.com"], ytd-button-renderer a[href*="accounts.google"]').first();
   if (await signInLink.count() > 0) {
     await signInLink.click();
     await h.waitForLoad(page, 15000);
@@ -95,42 +164,39 @@ async function login(page, account) {
   }
 
   await h.preAction();
-
-  // Step 1: email
-  await h.humanType(page, SEL.email_input, account.email ?? account.username);
+  await h.humanType(page, 'input[type="email"]', account.email ?? account.username);
   await h.delay(h.randInt(400, 800));
-  await page.locator(SEL.email_next).first().click();
+  await page.locator('#identifierNext').first().click();
   await h.waitForLoad(page, 15000);
   await h.delay(h.randInt(800, 1500));
 
-  // Step 2: password
-  const pwField = await page.$(SEL.password_input);
+  const pwField = await page.$('input[type="password"]');
   if (!pwField) return { success: false, event: 'login_required' };
 
-  await h.humanType(page, SEL.password_input, account.password);
+  await h.humanType(page, 'input[type="password"]', account.password);
   await h.delay(h.randInt(600, 1200));
-  await page.locator(SEL.password_next).first().click();
+  await page.locator('#passwordNext').first().click();
   await h.waitForLoad(page, 20000);
 
-  // Step 3: TOTP/2FA if needed
-  const otpField = await page.$(SEL.otp_input);
+  // TOTP if needed
+  const otpField = await page.$('input[id="totpPin"], input[aria-label*="code"]');
   if (otpField) {
     if (!account.two_fa_secret) return { success: false, event: 'challenge' };
     const { generateTOTP } = require('./instagram');
     const otp = generateTOTP(account.two_fa_secret);
-    await h.humanType(page, SEL.otp_input, otp);
+    await h.humanType(page, 'input[id="totpPin"], input[aria-label*="code"]', otp);
     await h.delay(h.randInt(500, 900));
-    const otpNext = page.locator(SEL.otp_next).first();
-    if (await otpNext.count() > 0) await otpNext.click();
+    const nextBtn = page.locator('#totpNext, button:has-text("Next")').first();
+    if (await nextBtn.count() > 0) await nextBtn.click();
     await h.waitForLoad(page, 15000);
   }
 
   const detection = await checkForDetection(page);
   if (detection) return { success: false, event: detection };
 
-  // Verify by checking avatar
-  const loggedIn = await page.$('button#avatar-btn, #avatar-container');
-  if (!loggedIn) return { success: false, event: 'login_required' };
+  if (!await page.$('button#avatar-btn, #avatar-container')) {
+    return { success: false, event: 'login_required' };
+  }
 
   log.info('Login successful', { username: account.email ?? account.username });
   return { success: true };
@@ -138,56 +204,297 @@ async function login(page, account) {
 
 // ----------------------------------------------------------------
 // 2. watchVideo
+//    Plays to watchPct% of actual video duration.
+//    clickThrough=true skips navigation (already on the video page).
 // ----------------------------------------------------------------
 
-async function watchVideo(page, videoUrl) {
-  log.debug('Watching video', { videoUrl });
+async function watchVideo(page, videoUrl, { watchPct = null, watchMs: watchMsOverride = null, clickThrough = false, referer = null } = {}) {
+  log.debug('watchVideo', { videoUrl, clickThrough });
 
-  await page.goto(videoUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
-  await h.waitForLoad(page);
-  await h.preAction();
+  if (!clickThrough) {
+    const gotoOpts = { waitUntil: 'domcontentloaded', timeout: 25000 };
+    if (referer) gotoOpts.referer = referer;
+    await page.goto(videoUrl, gotoOpts);
+    await h.waitForLoad(page);
+    await h.preAction();
+  }
+
+  await _dismissPopups(page);
 
   const detection = await checkForDetection(page);
   if (detection) return { success: false, event: detection };
 
-  // Click play if paused
-  const playBtn = page.locator('button.ytp-play-button[aria-label*="Play"]').first();
-  if (await playBtn.count() > 0) {
-    await playBtn.click().catch(() => {});
+  await _ensurePlaying(page);
+
+  let watchMs;
+  if (watchMsOverride !== null) {
+    watchMs = watchMsOverride;
+  } else {
+    const duration = await _getDuration(page);
+    const pct      = watchPct ?? (h.randInt(45, 80) / 100);
+    if (duration) {
+      watchMs = Math.round(duration * pct * 1000);
+      watchMs = Math.min(watchMs, 300_000);
+      watchMs = Math.max(watchMs, 15_000);
+    } else {
+      watchMs = h.randInt(20_000, 90_000);
+    }
   }
 
-  // Watch 20–90% of a typical video duration (simulate realistic session)
-  const watchMs = h.randInt(15000, 90000);
-  await h.delay(watchMs);
+  log.debug('Watch plan', { duration, pct, watchMs });
 
-  // Occasional scroll to comments section (natural)
-  if (Math.random() < 0.35) {
-    await h.humanScroll(page, { scrolls: h.randInt(2, 5) });
+  await _watchSegmented(page, watchMs);
+
+  log.debug('watchVideo done', { videoUrl, watchMs });
+  return { success: true, watchMs };
+}
+
+// ----------------------------------------------------------------
+// URL utilities — used by ghost system and anonymous view
+// ----------------------------------------------------------------
+
+function cleanUrl(url) {
+  try {
+    const u = new URL(url);
+    if (u.hostname === 'youtu.be') {
+      return `https://www.youtube.com/watch?v=${u.pathname.slice(1)}`;
+    }
+    ['si', 'feature', 'pp', 'ab_channel'].forEach(p => u.searchParams.delete(p));
+    return u.toString();
+  } catch (_) { return url; }
+}
+
+function extractId(url) {
+  try {
+    const u = new URL(url);
+    if (u.searchParams.get('v'))         return u.searchParams.get('v');
+    if (u.pathname.includes('/shorts/')) return u.pathname.split('/shorts/')[1]?.split('?')[0];
+    if (u.hostname === 'youtu.be')       return u.pathname.slice(1).split('?')[0];
+    return null;
+  } catch (_) { return null; }
+}
+
+// ----------------------------------------------------------------
+// 3. searchAndWatch
+//    YouTube homepage → type keyword → reach target video → watchVideo
+//
+//    opts.targetUrl (ghost mode): search builds organic referrer, then
+//      navigate to the specific target video (click from results if found,
+//      direct nav if not). Referrer chain: search results → target video.
+//
+//    without targetUrl: click a random top result (normal account use).
+// ----------------------------------------------------------------
+
+async function searchAndWatch(page, keyword, opts = {}) {
+  const { watchPct = null, targetUrl = null, clickThrough = false } = opts;
+  log.debug('searchAndWatch', { keyword, targetUrl: targetUrl ? '(set)' : null });
+
+  if (!clickThrough) {
+    await page.goto(BASE_URL, { waitUntil: 'domcontentloaded', timeout: 25000 });
+    await h.waitForLoad(page);
+    await h.preAction();
+    await _dismissPopups(page);
   }
 
-  log.debug('Video watched', { videoUrl, watchMs });
+  const detection = await checkForDetection(page);
+  if (detection) return { success: false, event: detection };
+
+  // Type keyword into search box
+  const searchBox = await page.$(SEL.search_input);
+  if (!searchBox) return { success: false, event: 'warning', message: 'Search box not found' };
+
+  await h.scrollToElementHandle(page, searchBox);
+  await searchBox.click();
+  await h.delay(h.randInt(400, 900));
+
+  for (const ch of keyword) {
+    await page.keyboard.type(ch);
+    await h.typingPause();
+  }
+  await h.delay(h.randInt(400, 800));
+  await page.keyboard.press('Enter');
+  await h.waitForLoad(page, 15000);
+  await h.delay(h.randInt(1500, 3500));
+
+  // Browse results naturally (builds session intent signal)
+  await h.humanScroll(page, { scrolls: h.randInt(2, 4) });
+  await h.delay(h.randInt(1000, 2500));
+
+  if (targetUrl) {
+    // Ghost path: try to find target video in results and click it (organic);
+    // fall back to direct navigation if not visible (search page = referrer).
+    const videoId = extractId(targetUrl);
+    let navigated = false;
+
+    if (videoId) {
+      try {
+        const link = await page.$(`a[href*="${videoId}"]`);
+        if (link) {
+          const box = await link.boundingBox().catch(() => null);
+          if (box) {
+            await h.moveMouseTo(
+              page,
+              box.x + h.randInt(5, Math.max(6, box.width  - 5)),
+              box.y + h.randInt(3, Math.max(4, box.height - 3)),
+            );
+            await h.delay(h.randInt(150, 400));
+          }
+          await link.click();
+          navigated = true;
+          await h.waitForLoad(page, 20000);
+          await h.delay(h.randInt(2000, 4000));
+        }
+      } catch (_) {}
+    }
+
+    if (!navigated) {
+      // Not in results → navigate directly; search page is still the referrer
+      await page.goto(cleanUrl(targetUrl), { waitUntil: 'domcontentloaded', timeout: 40000 });
+      await h.delay(h.randInt(2000, 4000));
+    }
+
+  } else {
+    // Normal path: click one of the top 5 results
+    const results = await page.$$(SEL.search_results);
+    if (results.length === 0) {
+      return { success: false, event: 'warning', message: 'No search results found' };
+    }
+    const chosen = results[h.randInt(0, Math.min(results.length - 1, 4))];
+    const box    = await chosen.boundingBox().catch(() => null);
+    if (box) {
+      await h.moveMouseTo(page, box.x + box.width / 2, box.y + box.height / 2);
+      await h.shortPause();
+    }
+    await chosen.click();
+    await h.waitForLoad(page, 20000);
+    await h.delay(h.randInt(2000, 4000));
+  }
+
+  // Watch whatever video we landed on
+  return watchVideo(page, page.url(), { watchPct, clickThrough: true });
+}
+
+// ----------------------------------------------------------------
+// 4. scrollFeed
+//    Browse homepage, hover over thumbnails, occasionally click & peek
+// ----------------------------------------------------------------
+
+async function scrollFeed(page, { seconds = null } = {}) {
+  const duration = (seconds ?? h.randInt(30, 120)) * 1000;
+  log.debug('scrollFeed', { duration });
+
+  await page.goto(BASE_URL, { waitUntil: 'domcontentloaded', timeout: 20000 });
+  await h.waitForLoad(page);
+  await h.preAction();
+  await _dismissPopups(page);
+
+  const detection = await checkForDetection(page);
+  if (detection) return { success: false, event: detection };
+
+  const start = Date.now();
+  while (Date.now() - start < duration) {
+    await h.humanScroll(page, { scrolls: h.randInt(2, 4) });
+
+    // Hover a random thumbnail
+    const cards = page.locator(SEL.feed_video);
+    const cnt   = await cards.count();
+    if (cnt > 0) {
+      const card = cards.nth(h.randInt(0, Math.min(cnt - 1, 8)));
+      const el   = await card.elementHandle().catch(() => null);
+      if (el) {
+        const cb = await el.boundingBox().catch(() => null);
+        if (cb) await page.mouse.move(cb.x + cb.width / 2, cb.y + cb.height / 2);
+      }
+    }
+
+    // 20% chance: click a video and watch for a short peek (10-25s)
+    if (Math.random() < 0.2) {
+      const link = page.locator(SEL.feed_video).nth(h.randInt(0, 4));
+      const a    = link.locator('a#video-title').first();
+      if (await a.count() > 0) {
+        await a.click();
+        await h.waitForLoad(page, 15000);
+        await h.delay(h.randInt(2000, 4000));
+        await _dismissPopups(page);
+        await _ensurePlaying(page);
+        await h.delay(h.randInt(10_000, 25_000));
+        await page.goBack({ waitUntil: 'domcontentloaded' }).catch(() => {});
+        await h.delay(h.randInt(1500, 3000));
+      }
+    }
+
+    await h.delay(h.randInt(1500, 4000));
+  }
+
   return { success: true };
 }
 
 // ----------------------------------------------------------------
-// 3. likeVideo
+// 5. subscribeChannel
 // ----------------------------------------------------------------
 
-async function likeVideo(page, videoUrl) {
-  log.debug('Liking video', { videoUrl });
+async function subscribeChannel(page, channelUrl) {
+  log.debug('subscribeChannel', { channelUrl });
 
-  await page.goto(videoUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
+  await page.goto(channelUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
   await h.waitForLoad(page);
   await h.preAction();
 
-  // Already liked?
-  const alreadyLiked = await page.$(SEL.liked_state);
-  if (alreadyLiked) return { success: true, alreadyLiked: true };
+  if (await page.$(SEL.subscribed_state)) return { success: true, alreadySubscribed: true };
 
   const detection = await checkForDetection(page);
   if (detection) return { success: false, event: detection };
 
-  const likeBtn = page.locator(SEL.like_button).first();
+  const subBtn = page.locator(SEL.subscribe_btn).first();
+  if (await subBtn.count() === 0) {
+    return { success: false, event: 'warning', message: 'Subscribe button not found' };
+  }
+
+  await h.scrollToElementHandle(page, await subBtn.elementHandle());
+  await h.preAction();
+  await subBtn.click();
+  await h.delay(h.randInt(800, 1500));
+
+  // Dismiss "turn on notifications" popup
+  try {
+    const notifSkip = page.locator(SEL.notif_skip).first();
+    if (await notifSkip.count() > 0) {
+      await notifSkip.click();
+      await h.delay(500);
+    }
+  } catch (_) {}
+
+  const d2 = await checkForDetection(page);
+  if (d2) return { success: false, event: d2 };
+
+  log.debug('subscribeChannel done', { channelUrl });
+  await h.postAction();
+  return { success: true };
+}
+
+// ----------------------------------------------------------------
+// 6. likeVideo
+//    Watches 15-30 s first (natural), then likes
+// ----------------------------------------------------------------
+
+async function likeVideo(page, videoUrl) {
+  log.debug('likeVideo', { videoUrl });
+
+  await page.goto(videoUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
+  await h.waitForLoad(page);
+  await h.preAction();
+  await _dismissPopups(page);
+
+  if (await page.$(SEL.liked_state)) return { success: true, alreadyLiked: true };
+
+  const detection = await checkForDetection(page);
+  if (detection) return { success: false, event: detection };
+
+  // Watch a bit before liking (looks more natural)
+  await _ensurePlaying(page);
+  await h.delay(h.randInt(15_000, 30_000));
+
+  const likeBtn = page.locator(SEL.like_btn).first();
   if (await likeBtn.count() === 0) {
     return { success: false, event: 'warning', message: 'Like button not found' };
   }
@@ -200,66 +507,29 @@ async function likeVideo(page, videoUrl) {
   const d2 = await checkForDetection(page);
   if (d2) return { success: false, event: d2 };
 
-  log.debug('Video liked', { videoUrl });
+  log.debug('likeVideo done', { videoUrl });
   await h.postAction();
   return { success: true };
 }
 
 // ----------------------------------------------------------------
-// 4. subscribeChannel  (rateType = 'follow')
-// ----------------------------------------------------------------
-
-async function subscribeChannel(page, channelUrl) {
-  log.debug('Subscribing to channel', { channelUrl });
-
-  await page.goto(channelUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
-  await h.waitForLoad(page);
-  await h.preAction();
-
-  // Already subscribed?
-  const alreadySub = await page.$(SEL.subscribed_state);
-  if (alreadySub) return { success: true, alreadySubscribed: true };
-
-  const detection = await checkForDetection(page);
-  if (detection) return { success: false, event: detection };
-
-  const subBtn = page.locator(SEL.subscribe_button).first();
-  if (await subBtn.count() === 0) {
-    return { success: false, event: 'warning', message: 'Subscribe button not found' };
-  }
-
-  await h.scrollToElementHandle(page, await subBtn.elementHandle());
-  await h.preAction();
-  await subBtn.click();
-  await h.delay(h.randInt(800, 1500));
-
-  const d2 = await checkForDetection(page);
-  if (d2) return { success: false, event: d2 };
-
-  log.debug('Subscribed', { channelUrl });
-  await h.postAction();
-  return { success: true };
-}
-
-// ----------------------------------------------------------------
-// 5. commentVideo
+// 7. commentVideo
 // ----------------------------------------------------------------
 
 async function commentVideo(page, videoUrl, text) {
-  log.debug('Commenting on video', { videoUrl });
+  log.debug('commentVideo', { videoUrl });
 
   await page.goto(videoUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
   await h.waitForLoad(page);
   await h.preAction();
+  await _dismissPopups(page);
 
   const detection = await checkForDetection(page);
   if (detection) return { success: false, event: detection };
 
-  // Scroll down to reveal comment section
   await h.humanScroll(page, { scrolls: h.randInt(3, 6) });
   await h.delay(h.randInt(1000, 2000));
 
-  // Click the comment box to activate it
   const commentBox = page.locator(SEL.comment_box).first();
   if (await commentBox.count() === 0) {
     return { success: false, event: 'warning', message: 'Comment box not found' };
@@ -271,9 +541,7 @@ async function commentVideo(page, videoUrl, text) {
   for (const char of text) {
     await page.keyboard.type(char);
     await h.typingPause();
-    if (char === ' ' && Math.random() < 0.25) {
-      await h.delay(h.randInt(100, 350));
-    }
+    if (char === ' ' && Math.random() < 0.25) await h.delay(h.randInt(100, 350));
   }
 
   await h.delay(h.randInt(700, 1300));
@@ -290,83 +558,7 @@ async function commentVideo(page, videoUrl, text) {
   const d2 = await checkForDetection(page);
   if (d2) return { success: false, event: d2 };
 
-  log.debug('Comment posted', { videoUrl });
-  await h.postAction();
-  return { success: true };
-}
-
-// ----------------------------------------------------------------
-// 6. scrollFeed — browse home/subscription feed
-// ----------------------------------------------------------------
-
-async function scrollFeed(page, { seconds = null } = {}) {
-  const duration = seconds ?? h.randInt(30, 120);
-  log.debug('Scrolling YouTube feed', { duration });
-
-  await page.goto(BASE_URL, { waitUntil: 'domcontentloaded', timeout: 20000 });
-  await h.waitForLoad(page);
-  await h.preAction();
-
-  const start = Date.now();
-  while (Date.now() - start < duration * 1000) {
-    await h.humanScroll(page, { scrolls: h.randInt(2, 4) });
-
-    // Hover over a random video to simulate browsing
-    const videos = page.locator(SEL.video_renderer);
-    const count  = await videos.count();
-    if (count > 0) {
-      const pick = videos.nth(h.randInt(0, Math.min(count - 1, 8)));
-      const el   = await pick.elementHandle().catch(() => null);
-      if (el) {
-        const box = await el.boundingBox().catch(() => null);
-        if (box) await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-      }
-    }
-
-    await h.delay(h.randInt(2000, 5000));
-  }
-
-  return { success: true };
-}
-
-// ----------------------------------------------------------------
-// shareVideo — opens share panel and copies link (registers as share event)
-// ----------------------------------------------------------------
-
-async function shareVideo(page, videoUrl) {
-  log.debug('Sharing video', { videoUrl });
-
-  await page.goto(videoUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
-  await h.waitForLoad(page);
-  await h.preAction();
-
-  const detection = await checkForDetection(page);
-  if (detection) return { success: false, event: detection };
-
-  const shareBtn = page.locator(SEL.share_button).first();
-  if (await shareBtn.count() === 0) {
-    return { success: false, event: 'warning', message: 'Share button not found' };
-  }
-
-  await h.scrollToElementHandle(page, await shareBtn.elementHandle());
-  await h.shortPause();
-  await shareBtn.click();
-  await h.delay(h.randInt(800, 1500));
-
-  // Click "Copy link" — registers the share interaction server-side
-  const copyBtn = page.locator(SEL.share_copy_link).first();
-  if (await copyBtn.count() > 0) {
-    await copyBtn.click();
-    await h.delay(h.randInt(500, 1000));
-  }
-
-  // Dismiss panel with Escape
-  await page.keyboard.press('Escape');
-
-  const d2 = await checkForDetection(page);
-  if (d2) return { success: false, event: d2 };
-
-  log.debug('Video shared', { videoUrl });
+  log.debug('commentVideo done', { videoUrl });
   await h.postAction();
   return { success: true };
 }
@@ -374,10 +566,13 @@ async function shareVideo(page, videoUrl) {
 module.exports = {
   login,
   watchVideo,
-  likeVideo,
-  subscribeChannel,
-  commentVideo,
+  searchAndWatch,
   scrollFeed,
-  shareVideo,
+  subscribeChannel,
+  likeVideo,
+  commentVideo,
   checkForDetection,
+  // URL utilities for ghost / anonymous view systems
+  cleanUrl,
+  extractId,
 };

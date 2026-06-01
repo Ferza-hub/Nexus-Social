@@ -1,18 +1,10 @@
 'use strict';
 
-const { makeLogger } = require('../utils/logger');
-const { launchForAccount, isAccountBusy, isConcurrencyFull } = require('./browser');
-const { saveSession } = require('../account-manager/session-manager');
-const { setSpeedMode, isSpeedMode } = require('./human');
-const am = require('../account-manager/index');
-
-// Actions where behavioral quality matters — always run at normal speed
-// regardless of global speed mode setting.
-const INTERACTION_ACTIONS = new Set([
-  'comment', 'reply_tweet', 'dm',
-  'post_reel', 'post_story',
-  'login',
-]);
+const path = require('path');
+const fs   = require('fs');
+const { makeLogger }      = require('../utils/logger');
+const { launchEphemeral, launchWithSession, isConcurrencyFull, recordProxyFailure } = require('./browser');
+const { getDb }           = require('../database/db');
 
 const instagram = require('./platforms/instagram');
 const tiktok    = require('./platforms/tiktok');
@@ -23,325 +15,279 @@ const facebook  = require('./platforms/facebook');
 
 const log = makeLogger('PlaywrightEngine');
 
-// ----------------------------------------------------------------
-// Platform module registry
-// ----------------------------------------------------------------
-
-const PLATFORMS = {
-  instagram,
-  tiktok,
-  twitter,
-  youtube,
-  threads,
-  facebook,
-};
+const PLATFORMS = { instagram, tiktok, twitter, youtube, threads, facebook };
 
 // ----------------------------------------------------------------
-// Action definitions: which platform module method to call,
-// and which rate_limit action_type to record
+// Action map — used by executeGhostAction to resolve fn + args
 // ----------------------------------------------------------------
 
 const ACTION_MAP = {
   instagram: {
-    login:         { fn: 'login',        rateType: null },
-    scroll_feed:   { fn: 'scrollFeed',   rateType: null },
-    watch_story:   { fn: 'watchStory',   rateType: 'story_view' },
-    like_post:     { fn: 'likePost',     rateType: 'like' },
-    follow:        { fn: 'followUser',   rateType: 'follow' },
-    unfollow:      { fn: 'unfollowUser', rateType: 'unfollow' },
-    comment:       { fn: 'commentPost',  rateType: 'comment' },
-    watch_reel:    { fn: 'watchReel',    rateType: 'watch_reel' },
-    dm:            { fn: 'sendDM',       rateType: 'dm' },
-    post_reel:     { fn: 'postReel',     rateType: null },
-    post_story:    { fn: 'postStory',    rateType: null },
+    watch_reel:  { fn: 'watchReel',    args: p => [p.reelUrl]             },
+    like_post:   { fn: 'likePost',     args: p => [p.postUrl]             },
+    follow:      { fn: 'followUser',   args: p => [p.username]            },
+    unfollow:    { fn: 'unfollowUser', args: p => [p.username]            },
+    comment:     { fn: 'commentPost',  args: p => [p.postUrl, p.text]     },
   },
   tiktok: {
-    login:         { fn: 'login',        rateType: null },
-    watch_video:   { fn: 'watchVideo',   rateType: 'watch_reel' },
-    like_video:    { fn: 'likeVideo',    rateType: 'like' },
-    follow:        { fn: 'followUser',   rateType: 'follow' },
-    comment:       { fn: 'commentVideo', rateType: 'comment' },
-    scroll_fyp:    { fn: 'scrollFYP',    rateType: null },
+    watch_video: { fn: 'watchVideo',   args: p => [p.videoUrl]            },
+    like_video:  { fn: 'likeVideo',    args: p => [p.videoUrl]            },
+    follow:      { fn: 'followUser',   args: p => [p.username]            },
+    comment:     { fn: 'commentVideo', args: p => [p.videoUrl, p.text]    },
   },
   twitter: {
-    login:         { fn: 'login',        rateType: null },
-    scroll_feed:   { fn: 'scrollFeed',   rateType: null },
-    like_post:     { fn: 'likePost',     rateType: 'like' },
-    follow:        { fn: 'followUser',   rateType: 'follow' },
-    unfollow:      { fn: 'unfollowUser', rateType: 'unfollow' },
-    reply_tweet:   { fn: 'replyTweet',   rateType: 'comment' },
+    like_post:   { fn: 'likePost',     args: p => [p.tweetUrl]            },
+    follow:      { fn: 'followUser',   args: p => [p.username]            },
   },
   youtube: {
-    login:         { fn: 'login',             rateType: null },
-    scroll_feed:   { fn: 'scrollFeed',        rateType: null },
-    watch_video:   { fn: 'watchVideo',        rateType: 'watch_reel' },
-    like_video:    { fn: 'likeVideo',         rateType: 'like' },
-    subscribe:     { fn: 'subscribeChannel',  rateType: 'follow' },
-    comment:       { fn: 'commentVideo',      rateType: 'comment' },
-    share:         { fn: 'shareVideo',        rateType: null },
+    watch_video: { fn: 'watchVideo',   args: p => [youtube.cleanUrl(p.videoUrl), p] },
+    like_video:  { fn: 'likeVideo',    args: p => [p.videoUrl]            },
+    subscribe:   { fn: 'subscribeChannel', args: p => [p.channelUrl]      },
+    comment:     { fn: 'commentVideo', args: p => [p.videoUrl, p.text]    },
   },
   threads: {
-    login:         { fn: 'login',        rateType: null },
-    scroll_feed:   { fn: 'scrollFeed',   rateType: null },
-    like_post:     { fn: 'likePost',     rateType: 'like' },
-    follow:        { fn: 'followUser',   rateType: 'follow' },
-    unfollow:      { fn: 'unfollowUser', rateType: 'unfollow' },
-    comment:       { fn: 'comment',      rateType: 'comment' },
+    like_post:   { fn: 'likePost',     args: p => [p.postUrl]             },
+    follow:      { fn: 'followUser',   args: p => [p.username]            },
   },
   facebook: {
-    login:         { fn: 'login',        rateType: null },
-    scroll_feed:   { fn: 'scrollFeed',   rateType: null },
-    like_post:     { fn: 'likePost',     rateType: 'like' },
-    follow:        { fn: 'followUser',   rateType: 'follow' },
-    comment:       { fn: 'comment',      rateType: 'comment' },
-    watch_reel:    { fn: 'watchReel',    rateType: 'watch_reel' },
-    like_reel:     { fn: 'likeReel',     rateType: 'like' },
-    share:         { fn: 'sharePost',    rateType: null },
+    watch_video: { fn: 'watchVideo',   args: p => [p.videoUrl]            },
+    watch_reel:  { fn: 'watchReel',    args: p => [p]                     },
+    like_post:   { fn: 'likePost',     args: p => [p.postUrl]             },
+    follow_page: { fn: 'followPage',   args: p => [p.profileUrl]          },
+    comment:     { fn: 'comment',      args: p => [p.postUrl, p.text]     },
   },
-  // instagram additions (already has entries above — merge here)
 };
 
 // ----------------------------------------------------------------
-// Core executor: run one action for one account
-//
-//   accountId : number
-//   platform  : 'instagram' | 'tiktok' | ...
-//   action    : action name from ACTION_MAP
-//   params    : additional arguments to pass to the platform fn
-//
-// Returns { success, event?, message?, ... }
+// Key account helpers — round-robin from accounts table
 // ----------------------------------------------------------------
 
-async function executeAction(accountId, platform, action, params = {}) {
-  const platformModule = PLATFORMS[platform];
-  if (!platformModule) throw new Error(`Unknown platform: ${platform}`);
+const SESSION_DIR = process.env.SESSION_DIR ?? path.join(__dirname, '../../data/sessions');
 
-  const actionDef = ACTION_MAP[platform]?.[action];
-  if (!actionDef) throw new Error(`Unknown action "${action}" for platform "${platform}"`);
+function _getAccount(platform) {
+  const db   = getDb();
+  const acct = db.prepare(`
+    SELECT * FROM accounts
+    WHERE platform=? AND status='active'
+    ORDER BY last_used_at ASC NULLS FIRST LIMIT 1
+  `).get(platform);
+  if (!acct) return null;
+  db.prepare('UPDATE accounts SET last_used_at=? WHERE id=?')
+    .run(new Date().toISOString(), acct.id);
+  return acct;
+}
 
-  // ---- 1. Pre-action gate ----
-  if (actionDef.rateType) {
-    const gate = am.canAct(accountId, platform, actionDef.rateType);
-    if (!gate.allowed) {
-      log.debug('Action blocked by gate', { accountId, platform, action, reason: gate.reason });
-      return { success: false, blocked: true, reason: gate.reason };
+function _sessionPath(accountId) {
+  const dir = path.join(SESSION_DIR, String(accountId));
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  return path.join(dir, 'session.json');
+}
+
+function _saveSession(accountId, state) {
+  const filePath = _sessionPath(accountId);
+  fs.writeFileSync(filePath, JSON.stringify(state));
+  getDb().prepare('UPDATE accounts SET storage_state_path=? WHERE id=?').run(filePath, accountId);
+}
+
+// ----------------------------------------------------------------
+// ----------------------------------------------------------------
+// Social referrer pool — weighted per platform to match real
+// traffic distribution. Set as Referer header on first navigation;
+// zero extra page loads, platform sees organic share traffic.
+//
+// Weights reflect: WhatsApp/Telegram (mobile share) dominate for
+// short-form content; Google leads for YouTube; FB wrapper for FB.
+// ----------------------------------------------------------------
+
+const _REFERRERS = {
+  youtube: [
+    { url: 'https://www.google.com/',     w: 30 },
+    { url: null,                           w: 20 }, // direct
+    { url: 'https://web.whatsapp.com/',   w: 20 },
+    { url: 'https://www.facebook.com/',   w: 15 },
+    { url: 'https://web.telegram.org/',   w: 10 },
+    { url: 'https://x.com/',              w:  5 },
+  ],
+  facebook: [
+    { url: 'https://web.whatsapp.com/',   w: 30 },
+    { url: 'https://l.facebook.com/',     w: 25 },
+    { url: null,                           w: 20 },
+    { url: 'https://web.telegram.org/',   w: 15 },
+    { url: 'https://www.google.com/',     w: 10 },
+  ],
+  instagram: [
+    { url: 'https://web.whatsapp.com/',   w: 35 },
+    { url: null,                           w: 25 },
+    { url: 'https://web.telegram.org/',   w: 20 },
+    { url: 'https://l.facebook.com/',     w: 15 },
+    { url: 'https://www.google.com/',     w:  5 },
+  ],
+  tiktok: [
+    { url: 'https://web.whatsapp.com/',   w: 30 },
+    { url: null,                           w: 30 },
+    { url: 'https://web.telegram.org/',   w: 20 },
+    { url: 'https://www.facebook.com/',   w: 10 },
+    { url: 'https://x.com/',              w: 10 },
+  ],
+  twitter: [
+    { url: 'https://x.com/',              w: 30 },
+    { url: null,                           w: 25 },
+    { url: 'https://web.whatsapp.com/',   w: 20 },
+    { url: 'https://www.google.com/',     w: 15 },
+    { url: 'https://web.telegram.org/',   w: 10 },
+  ],
+  threads: [
+    { url: 'https://web.whatsapp.com/',   w: 30 },
+    { url: null,                           w: 25 },
+    { url: 'https://l.facebook.com/',     w: 25 },
+    { url: 'https://web.telegram.org/',   w: 20 },
+  ],
+};
+
+function _pickReferrer(platform) {
+  const pool  = _REFERRERS[platform] ?? [{ url: null, w: 1 }];
+  const total = pool.reduce((s, e) => s + e.w, 0);
+  let r = Math.random() * total;
+  for (const entry of pool) { r -= entry.w; if (r <= 0) return entry.url; }
+  return null;
+}
+
+function _ri(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
+function _delay(ms)    { return new Promise(r => setTimeout(r, ms)); }
+
+// ----------------------------------------------------------------
+// _checkLoggedIn — navigate to platform and verify session
+// ----------------------------------------------------------------
+
+async function _checkLoggedIn(page, platform) {
+  try {
+    if (platform === 'instagram') {
+      await page.goto('https://www.instagram.com/', { waitUntil: 'domcontentloaded', timeout: 15_000 });
+      return !page.url().includes('/accounts/login') && !page.url().includes('/challenge');
     }
-  } else {
-    // For non-rate-limited actions (login, scroll) — still check status
-    const account = am.getAccount(accountId);
-    if (!account) return { success: false, reason: 'account_not_found' };
-    if (account.status === 'disabled') return { success: false, reason: 'account_disabled' };
-  }
+    if (platform === 'tiktok') {
+      await page.goto('https://www.tiktok.com/', { waitUntil: 'domcontentloaded', timeout: 15_000 });
+      return !(await page.$('a[href*="/login"]'));
+    }
+    if (platform === 'twitter') {
+      await page.goto('https://x.com/home', { waitUntil: 'domcontentloaded', timeout: 15_000 });
+      return !page.url().includes('/flow/login') && !page.url().includes('/login');
+    }
+    if (platform === 'youtube') {
+      await page.goto('https://www.youtube.com/', { waitUntil: 'domcontentloaded', timeout: 15_000 });
+      return !!(await page.$('button#avatar-btn, #avatar-container'));
+    }
+    if (platform === 'threads') {
+      await page.goto('https://www.threads.net/', { waitUntil: 'domcontentloaded', timeout: 15_000 });
+      return !page.url().includes('/login');
+    }
+    if (platform === 'facebook') {
+      await page.goto('https://www.facebook.com/', { waitUntil: 'domcontentloaded', timeout: 15_000 });
+      return !page.url().includes('/login') && !page.url().includes('login.php');
+    }
+    return true;
+  } catch (_) { return false; }
+}
 
-  // ---- 2. Prevent concurrent browser instances + global cap ----
-  if (isAccountBusy(accountId)) {
-    log.warn('Account busy — skipping', { accountId, platform, action });
-    return { success: false, reason: 'account_busy' };
-  }
-  if (isConcurrencyFull()) {
-    log.warn('Concurrency limit reached — skipping', { accountId, platform, action });
-    return { success: false, reason: 'concurrency_limit' };
-  }
+// ----------------------------------------------------------------
+// executeGhostView — ephemeral browser, quick platform entry, then
+// watch 15-60 seconds (countable by the platform).
+// No persistent identity. Ghost is born and dies for this one task.
+// ----------------------------------------------------------------
 
-  const account = am.getAccount(accountId);
-  if (!account) return { success: false, reason: 'account_not_found' };
-
+async function executeGhostView(platform, url) {
   let session = null;
   try {
-    session = await launchForAccount(accountId, platform);
-    const { page, context } = session;
+    session = await launchEphemeral();
+    const { page, proxyId } = session;
 
-    // ---- 3. Ensure logged in ----
-    if (action !== 'login') {
-      const isLoggedIn = await _checkLoggedIn(page, platform);
-      if (!isLoggedIn) {
-        log.info('Session expired — re-logging in', { accountId, platform });
-        const loginResult = await platformModule.login(page, account);
-        if (!loginResult.success) {
-          am.health.logEvent(accountId, platform, loginResult.event ?? 'login_required', 'Auto re-login failed');
-          return loginResult;
-        }
-        // Save fresh session
-        const state = await context.storageState();
-        saveSession(accountId, platform, state);
-      }
+    const watchMs  = _ri(15_000, 60_000);
+    const referrer = _pickReferrer(platform);
+
+    if (platform === 'youtube') {
+      await youtube.watchVideo(page, youtube.cleanUrl(url), { watchMs, referer: referrer });
+    } else if (platform === 'facebook') {
+      await facebook.watchVideo(page, url, { watchMs, referer: referrer });
+    } else if (platform === 'instagram') {
+      await instagram.watchReel(page, url, { referer: referrer });
+    } else if (platform === 'tiktok') {
+      await tiktok.watchVideo(page, url, { referer: referrer });
+    } else {
+      const gotoOpts = { waitUntil: 'domcontentloaded', timeout: 30_000 };
+      if (referrer) gotoOpts.referer = referrer;
+      await page.goto(url, gotoOpts);
+      await _delay(watchMs);
     }
 
-    // ---- 4. Execute the action ----
-    // Force normal timing when:
-    // - action is an interaction (comment, DM, post, login) — quality matters
-    // - account is still warming up — natural behavior is critical during warmup
-    const fn = platformModule[actionDef.fn];
-    const args = _buildArgs(action, platform, account, params);
-    const wasSpeed = isSpeedMode();
-    const forceNormal = INTERACTION_ACTIONS.has(action) || account.status === 'warming';
-    if (forceNormal && wasSpeed) setSpeedMode(false);
-    let result;
-    try {
-      result = await fn(page, ...args);
-    } finally {
-      if (forceNormal && wasSpeed) setSpeedMode(true);
-    }
-
-    // ---- 5. Handle detection events ----
-    if (!result.success && result.event) {
-      am.health.logEvent(accountId, platform, result.event, result.message ?? null);
-      log.warn('Action returned detection event', { accountId, platform, action, event: result.event });
-      return result;
-    }
-
-    // ---- 6. Save updated session + record action ----
-    if (result.success) {
-      if (actionDef.rateType) {
-        am.limits.recordAction(accountId, platform, actionDef.rateType);
-      }
-      // Persist fresh session state after any successful action
-      const state = await context.storageState();
-      saveSession(accountId, platform, state);
-    }
-
-    return result;
+    log.info('Ghost view done', { platform });
+    return { success: true };
 
   } catch (err) {
-    log.error('Action threw error', { accountId, platform, action, err: err.message });
-    am.health.logEvent(accountId, platform, 'warning', `Action error: ${err.message}`);
-    return { success: false, error: err.message };
-
+    const isNetErr = /timeout|net::|ECONNREFUSED|ECONNRESET|ERR_/i.test(err.message);
+    if (isNetErr && session?.proxyId) recordProxyFailure(session.proxyId);
+    log.warn('Ghost view failed', { platform, err: err.message });
+    return { success: false, reason: err.message };
   } finally {
     if (session) await session.cleanup();
   }
 }
 
 // ----------------------------------------------------------------
-// Check if the page is already in an authenticated state
+// executeGhostAction — load key account session, spawn ephemeral
+// browser with that session, execute action, close.
+// Auth cookies are re-saved only when a re-login happens.
 // ----------------------------------------------------------------
 
-async function _checkLoggedIn(page, platform) {
+async function executeGhostAction(platform, action, params = {}) {
+  const platformModule = PLATFORMS[platform];
+  if (!platformModule) return { success: false, reason: `unknown_platform:${platform}` };
+
+  const actionDef = ACTION_MAP[platform]?.[action];
+  if (!actionDef) return { success: false, reason: `unknown_action:${action}` };
+
+  const account = _getAccount(platform);
+  if (!account) return { success: false, reason: 'no_key_account' };
+
+  let session = null;
   try {
-    if (platform === 'instagram') {
-      await page.goto('https://www.instagram.com/', { waitUntil: 'domcontentloaded', timeout: 15000 });
-      const url = page.url();
-      return !url.includes('/accounts/login') && !url.includes('/challenge');
+    session = await launchWithSession(account.storage_state_path);
+    const { page, context } = session;
+
+    const loggedIn = await _checkLoggedIn(page, platform);
+    if (!loggedIn) {
+      log.info('Key account session expired — re-logging in', { accountId: account.id, platform });
+      const creds = { email: account.email, password: account.password, username: account.email };
+      const loginR = await platformModule.login(page, creds);
+      if (!loginR.success) {
+        getDb().prepare("UPDATE accounts SET status='expired' WHERE id=?").run(account.id);
+        return { success: false, reason: `relogin_failed:${loginR.event}` };
+      }
+      // Persist fresh session so next launch doesn't need to re-login
+      const state = await context.storageState();
+      _saveSession(account.id, state);
     }
-    if (platform === 'tiktok') {
-      await page.goto('https://www.tiktok.com/', { waitUntil: 'domcontentloaded', timeout: 15000 });
-      const loginBtn = await page.$('a[href*="/login"]');
-      return !loginBtn;
+
+    const fn     = platformModule[actionDef.fn];
+    const args   = actionDef.args(params);
+    const result = await fn(page, ...args);
+
+    if (!result.success && result.event) {
+      log.warn('Ghost action detection', { accountId: account.id, platform, action, event: result.event });
+      if (['disabled', 'challenge'].includes(result.event)) {
+        getDb().prepare("UPDATE accounts SET status='expired' WHERE id=?").run(account.id);
+      }
+      return result;
     }
-    if (platform === 'twitter') {
-      await page.goto('https://x.com/home', { waitUntil: 'domcontentloaded', timeout: 15000 });
-      return !page.url().includes('/i/flow/login') && !page.url().includes('/login');
-    }
-    if (platform === 'youtube') {
-      await page.goto('https://www.youtube.com/', { waitUntil: 'domcontentloaded', timeout: 15000 });
-      const avatar = await page.$('button#avatar-btn, #avatar-container');
-      return !!avatar;
-    }
-    if (platform === 'threads') {
-      await page.goto('https://www.threads.net/', { waitUntil: 'domcontentloaded', timeout: 15000 });
-      return !page.url().includes('/login');
-    }
-    if (platform === 'facebook') {
-      await page.goto('https://www.facebook.com/', { waitUntil: 'domcontentloaded', timeout: 15000 });
-      return !page.url().includes('/login') && !page.url().includes('login.php');
-    }
-    return true;
-  } catch (_) {
-    return false;
+
+    log.info('Ghost action done', { platform, action });
+    return result;
+
+  } catch (err) {
+    log.error('Ghost action error', { accountId: account.id, platform, action, err: err.message });
+    return { success: false, error: err.message };
+  } finally {
+    if (session) await session.cleanup(); // browser closes; no state saved
   }
 }
 
-// ----------------------------------------------------------------
-// Map params object → positional args for each action function
-// Each platform function signature: (page, ...args)
-// ----------------------------------------------------------------
-
-function _buildArgs(action, platform, account, params) {
-  if (platform === 'instagram') {
-    switch (action) {
-      case 'login':       return [account];
-      case 'scroll_feed': return [params];
-      case 'watch_story': return [params.username];
-      case 'like_post':   return [params.postUrl];
-      case 'follow':      return [params.username];
-      case 'unfollow':    return [params.username];
-      case 'comment':     return [params.postUrl, params.text];
-      case 'watch_reel':  return [params.reelUrl];
-      case 'dm':          return [params.username, params.message];
-    }
-  }
-  if (platform === 'tiktok') {
-    switch (action) {
-      case 'login':       return [account];
-      case 'watch_video': return [params.videoUrl];
-      case 'like_video':  return [params.videoUrl];
-      case 'follow':      return [params.username];
-      case 'comment':     return [params.videoUrl, params.text];
-      case 'scroll_fyp':  return [params];
-    }
-  }
-  if (platform === 'twitter') {
-    switch (action) {
-      case 'login':        return [account];
-      case 'scroll_feed':  return [params];
-      case 'like_post':    return [params.tweetUrl];
-      case 'follow':       return [params.username];
-      case 'unfollow':     return [params.username];
-      case 'reply_tweet':  return [params.tweetUrl, params.text];
-    }
-  }
-  if (platform === 'youtube') {
-    switch (action) {
-      case 'login':        return [account];
-      case 'scroll_feed':  return [params];
-      case 'watch_video':  return [params.videoUrl];
-      case 'like_video':   return [params.videoUrl];
-      case 'subscribe':    return [params.channelUrl];
-      case 'comment':      return [params.videoUrl, params.text];
-      case 'share':        return [params.videoUrl];
-    }
-  }
-  if (platform === 'threads') {
-    switch (action) {
-      case 'login':        return [account];
-      case 'scroll_feed':  return [params];
-      case 'like_post':    return [params.postUrl];
-      case 'follow':       return [params.username];
-      case 'unfollow':     return [params.username];
-      case 'comment':      return [params.postUrl, params.text];
-    }
-  }
-  if (platform === 'facebook') {
-    switch (action) {
-      case 'login':        return [account];
-      case 'scroll_feed':  return [params];
-      case 'like_post':    return [params.postUrl];
-      case 'follow':       return [params.profileUrl];
-      case 'comment':      return [params.postUrl, params.text];
-      case 'watch_reel':   return [params.reelUrl];
-      case 'like_reel':    return [params.reelUrl];
-      case 'share':        return [params.postUrl];
-    }
-  }
-  // instagram post_reel / post_story additions
-  if (platform === 'instagram') {
-    switch (action) {
-      case 'post_reel':    return [params];  // { videoPath, caption, hashtags }
-      case 'post_story':   return [params];  // { mediaPath }
-    }
-  }
-  return [];
-}
-
-// ----------------------------------------------------------------
-// Convenience: run login + save session for a fresh account
-// ----------------------------------------------------------------
-
-async function loginAndSaveSession(accountId, platform) {
-  return executeAction(accountId, platform, 'login');
-}
-
-module.exports = {
-  executeAction,
-  loginAndSaveSession,
-};
+module.exports = { executeGhostView, executeGhostAction };
