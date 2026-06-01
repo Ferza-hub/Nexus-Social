@@ -203,12 +203,12 @@ async function executeGhostView(platform, url) {
 
     const referrer = _pickReferrer(platform);
 
-    // Platform-specific minimum watch time to register as a counted view:
-    // YouTube regular: 30s minimum (YouTube's threshold)
-    // Facebook video:  10s minimum (Meta counts at 10s for "ThruPlay")
-    // TikTok/Instagram/others: 3-5s threshold, 15s+ to be safe
+    // YouTube Shorts: threshold is ~3s (same as TikTok), no need to wait 30s.
+    // Regular YouTube: 30s minimum to register as a counted view.
+    // Facebook ThruPlay: counted at 10s; 15s+ to be safe.
+    const isShorts = platform === 'youtube' && /\/shorts\//i.test(url);
     const watchMs = platform === 'youtube'
-      ? _ri(30_000, 60_000)
+      ? (isShorts ? _ri(10_000, 20_000) : _ri(30_000, 60_000))
       : platform === 'facebook'
         ? _ri(15_000, 45_000)
         : _ri(15_000, 45_000);
