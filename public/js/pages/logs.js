@@ -41,9 +41,13 @@ const LogsPage = (() => {
         <h1 class="page-title">Logs</h1>
         <div class="flex gap-1">
           <select id="log-type" onchange="LogsPage.reload()">
-            <option value="">All</option>
-            <option value="health">Health</option>
-            <option value="campaign">Campaign</option>
+            <option value="">All platforms</option>
+            <option value="instagram">Instagram</option>
+            <option value="tiktok">TikTok</option>
+            <option value="twitter">Twitter/X</option>
+            <option value="youtube">YouTube</option>
+            <option value="facebook">Facebook</option>
+            <option value="threads">Threads</option>
           </select>
           <button class="btn btn-ghost" onclick="LogsPage.reload()">↺ Refresh</button>
           <button id="stream-btn" class="btn btn-success btn-sm" onclick="LogsPage.toggleStream()">▶ Live</button>
@@ -56,8 +60,8 @@ const LogsPage = (() => {
   async function reload() {
     _stopStream();
     try {
-      const type = document.getElementById('log-type')?.value || '';
-      const path = `/api/logs${type ? `?type=${type}&limit=200` : '?limit=200'}`;
+      const platform = document.getElementById('log-type')?.value || '';
+      const path = `/api/logs${platform ? `?platform=${platform}&limit=200` : '?limit=200'}`;
       _entries = await API.get(path);
       renderAll();
     } catch (err) { Toast.error(err.message); }

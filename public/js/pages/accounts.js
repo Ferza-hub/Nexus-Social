@@ -1,56 +1,45 @@
-// Accounts page
+// Key Accounts page — platform login credentials for ghost actions
 
 const AccountsPage = (() => {
   function badge(status) {
     return `<span class="badge badge-${status}">${status}</span>`;
   }
 
-  function warmupBar(warmup) {
-    if (!warmup || warmup.completed) return '<span class="text-muted">—</span>';
-    const pct = Math.min(100, Math.round((warmup.current_day / 15) * 100));
-    return `
-      <div style="min-width:80px">
-        <div class="text-sm text-muted">${warmup.current_phase} · day ${warmup.current_day}</div>
-        <div class="progress-bar mt-1"><div class="progress-fill" style="width:${pct}%"></div></div>
-      </div>`;
-  }
-
   function renderTable(accounts) {
     if (!accounts.length) return `
       <div class="empty-state">
-        <div class="empty-icon">👤</div>
-        <div>No accounts yet. Add your first account.</div>
+        <div class="empty-icon">🔑</div>
+        <div>No key accounts yet. Add credentials to enable likes, follows, and comments.</div>
       </div>`;
 
     return `
       <div class="table-wrap">
         <table>
           <thead><tr>
-            <th>#</th><th>Username</th><th>Platform</th><th>Role</th><th>Status</th>
-            <th>Warmup</th><th>API</th><th>Actions</th>
+            <th>#</th><th>Platform</th><th>Email</th><th>Status</th>
+            <th>Session</th><th>Last used</th><th>Actions</th>
           </tr></thead>
           <tbody>
-            ${accounts.map(acc => `
+            ${accounts.map(a => `
               <tr>
-                <td class="text-muted text-sm">${acc.id}</td>
-                <td><strong>${acc.username}</strong>${acc.email ? `<br><span class="text-muted text-sm">${acc.email}</span>` : ''}</td>
-                <td><span class="tag">${acc.platform}</span></td>
-                <td>
-                  ${acc.account_role === 'traffic'
-                    ? `<span class="tag" style="background:rgba(59,130,246,.15);color:#3b82f6">traffic</span>`
-                    : `<span class="tag" style="background:rgba(34,197,94,.1);color:#22c55e">managed</span>`}
-                </td>
-                <td>${badge(acc.status)}</td>
-                <td>${warmupBar(acc.warmup)}</td>
-                <td>${acc.api_connected ? '<span class="text-success">✓</span>' : '<span class="text-muted">—</span>'}</td>
+                <td class="text-muted text-sm">${a.id}</td>
+                <td><span class="tag">${a.platform}</span></td>
+                <td>${a.email}</td>
+                <td>${badge(a.status)}</td>
+                <td>${a.storage_state_path
+                  ? '<span style="color:#22c55e">✓ cached</span>'
+                  : '<span class="text-muted">—</span>'}</td>
+                <td class="text-muted text-sm">${a.last_used_at
+                  ? new Date(a.last_used_at).toLocaleString()
+                  : '—'}</td>
                 <td>
                   <div class="flex gap-1">
-                    <button class="btn btn-ghost btn-sm" onclick="AccountsPage.showHealth(${acc.id}, '${acc.username}')">Health</button>
-                    <button class="btn btn-ghost btn-sm" onclick="AccountsPage.showUsage(${acc.id}, '${acc.username}')">Usage</button>
-                    <button class="btn btn-ghost btn-sm" onclick="AccountsPage.toggleRole(${acc.id}, '${acc.account_role ?? 'managed'}')">
-                      ${acc.account_role === 'traffic' ? '→ managed' : '→ traffic'}
-                    </button>
-                    <button class="btn btn-danger btn-sm" onclick="AccountsPage.remove(${acc.id})">✕</button>
+                    ${a.status !== 'active'
+                      ? `<button class="btn btn-ghost btn-sm"
+                           onclick="AccountsPage.setStatus(${a.id},'active')">Reactivate</button>`
+                      : ''}
+                    <button class="btn btn-danger btn-sm"
+                      onclick="AccountsPage.remove(${a.id})">✕</button>
                   </div>
                 </td>
               </tr>`).join('')}
@@ -60,12 +49,18 @@ const AccountsPage = (() => {
   }
 
   async function render() {
-    const container = document.getElementById('page-container');
-    container.innerHTML = `
+    document.getElementById('page-container').innerHTML = `
       <div class="page-header">
-        <h1 class="page-title">Accounts</h1>
-        <button class="btn btn-primary" onclick="AccountsPage.add()">+ Add Account</button>
+        <h1 class="page-title">Key Accounts</h1>
+        <div class="flex gap-1">
+          <button class="btn btn-ghost" onclick="AccountsPage.bulkAdd()">Bulk import</button>
+          <button class="btn btn-primary" onclick="AccountsPage.add()">+ Add account</button>
+        </div>
       </div>
+      <p class="text-muted text-sm" style="margin-bottom:1rem">
+        These are "key" accounts used for actions (likes, follows, comments).
+        Ghost views are anonymous — no account needed.
+      </p>
       <div id="accounts-list">Loading...</div>`;
     await reload();
   }
@@ -74,138 +69,114 @@ const AccountsPage = (() => {
     try {
       const accounts = await API.get('/api/accounts');
       document.getElementById('accounts-list').innerHTML = renderTable(accounts);
-    } catch (err) {
-      Toast.error(err.message);
-    }
+    } catch (err) { Toast.error(err.message); }
   }
 
   function add() {
-    Modal.open('Add Account', `
+    Modal.open('Add Key Account', `
       <div class="form-group">
         <label>Platform</label>
         <select id="acc-platform">
           <option value="instagram">Instagram</option>
           <option value="tiktok">TikTok</option>
-          <option value="twitter">Twitter/X</option>
+          <option value="twitter">Twitter / X</option>
           <option value="youtube">YouTube</option>
           <option value="facebook">Facebook</option>
           <option value="threads">Threads</option>
         </select>
       </div>
-      <div class="form-row">
-        <div class="form-group">
-          <label>Username</label>
-          <input type="text" id="acc-username" placeholder="@username">
-        </div>
-        <div class="form-group">
-          <label>Password</label>
-          <input type="password" id="acc-password">
-        </div>
-      </div>
-      <div class="form-row">
-        <div class="form-group">
-          <label>Email (optional)</label>
-          <input type="email" id="acc-email">
-        </div>
-        <div class="form-group">
-          <label>Phone (optional)</label>
-          <input type="text" id="acc-phone" placeholder="+1234567890">
-        </div>
+      <div class="form-group">
+        <label>Email / Username</label>
+        <input type="text" id="acc-email" placeholder="account@email.com">
       </div>
       <div class="form-group">
-        <label>2FA Secret (TOTP base32, optional)</label>
-        <input type="text" id="acc-2fa" placeholder="JBSWY3DPEHPK3PXP">
-      </div>
-      <div class="form-group">
-        <label>Notes</label>
-        <input type="text" id="acc-notes">
+        <label>Password</label>
+        <input type="password" id="acc-password">
       </div>
       <div class="flex gap-1" style="justify-content:flex-end">
         <button class="btn btn-ghost" onclick="Modal.close()">Cancel</button>
-        <button class="btn btn-primary" onclick="AccountsPage._submitAdd()">Add Account</button>
+        <button class="btn btn-primary" onclick="AccountsPage._submitAdd()">Add</button>
       </div>`);
   }
 
   async function _submitAdd() {
-    const body = {
-      platform:     document.getElementById('acc-platform').value,
-      username:     document.getElementById('acc-username').value.trim().replace('@',''),
-      password:     document.getElementById('acc-password').value,
-      email:        document.getElementById('acc-email').value.trim() || undefined,
-      phone:        document.getElementById('acc-phone').value.trim() || undefined,
-      twoFaSecret:  document.getElementById('acc-2fa').value.trim() || undefined,
-      notes:        document.getElementById('acc-notes').value.trim() || undefined,
-      accountRole:  'managed',
-    };
-    if (!body.username || !body.password) return Toast.error('Username and password required');
+    const platform = document.getElementById('acc-platform').value;
+    const email    = document.getElementById('acc-email').value.trim();
+    const password = document.getElementById('acc-password').value;
+    if (!email || !password) return Toast.error('Email and password required');
     try {
-      await API.post('/api/accounts', body);
+      await API.post('/api/accounts', { platform, email, password });
       Toast.success('Account added');
       Modal.close();
       reload();
-    } catch (err) {
-      Toast.error(err.message);
-    }
+    } catch (err) { Toast.error(err.message); }
+  }
+
+  function bulkAdd() {
+    Modal.open('Bulk Import Accounts', `
+      <div class="form-group">
+        <label>Platform</label>
+        <select id="acc-bulk-platform">
+          <option value="instagram">Instagram</option>
+          <option value="tiktok">TikTok</option>
+          <option value="twitter">Twitter / X</option>
+          <option value="youtube">YouTube</option>
+          <option value="facebook">Facebook</option>
+          <option value="threads">Threads</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Accounts <span class="text-muted text-sm">— one per line: email:password</span></label>
+        <textarea id="acc-bulk-lines" rows="8"
+          style="width:100%;box-sizing:border-box;font-family:monospace;font-size:.82rem"
+          placeholder="user@gmail.com:password123&#10;other@email.com:secret456"></textarea>
+      </div>
+      <div class="flex gap-1" style="justify-content:flex-end">
+        <button class="btn btn-ghost" onclick="Modal.close()">Cancel</button>
+        <button class="btn btn-primary" onclick="AccountsPage._submitBulk()">Import</button>
+      </div>`);
+  }
+
+  async function _submitBulk() {
+    const platform = document.getElementById('acc-bulk-platform').value;
+    const raw      = document.getElementById('acc-bulk-lines').value.trim();
+    const lines    = raw.split('\n').map(l => l.trim()).filter(Boolean);
+    if (!lines.length) return Toast.error('Paste at least one line');
+
+    const accounts = lines.map(line => {
+      const idx      = line.indexOf(':');
+      const email    = line.slice(0, idx).trim();
+      const password = line.slice(idx + 1).trim();
+      return { email, password };
+    }).filter(a => a.email && a.password);
+
+    if (!accounts.length) return Toast.error('No valid lines (expected email:password)');
+
+    try {
+      const data = await API.post('/api/accounts/bulk', { platform, accounts });
+      Toast.success(`Imported ${data.inserted} of ${accounts.length}`);
+      Modal.close();
+      reload();
+    } catch (err) { Toast.error(err.message); }
+  }
+
+  async function setStatus(id, status) {
+    try {
+      await API.patch(`/api/accounts/${id}/status`, { status });
+      Toast.success(`Status updated to ${status}`);
+      reload();
+    } catch (err) { Toast.error(err.message); }
   }
 
   async function remove(id) {
-    Modal.confirm('Delete this account? This cannot be undone.', async () => {
+    Modal.confirm('Delete this account?', async () => {
       try {
         await API.delete(`/api/accounts/${id}`);
         Toast.success('Account deleted');
         reload();
-      } catch (err) {
-        Toast.error(err.message);
-      }
+      } catch (err) { Toast.error(err.message); }
     });
   }
 
-  async function showHealth(id, username) {
-    try {
-      const logs = await API.get(`/api/accounts/${id}/health`);
-      const rows = logs.map(l => `
-        <div class="log-entry">
-          <span class="log-time">${new Date(l.created_at).toLocaleString()}</span>
-          <span class="log-${l.event_type}">${l.event_type}</span>
-          <span></span>
-          <span class="text-muted">${l.message || ''}</span>
-        </div>`).join('');
-      Modal.open(`Health — ${username}`, `<div>${rows || '<p class="text-muted">No events</p>'}</div>`, { wide: true });
-    } catch (err) {
-      Toast.error(err.message);
-    }
-  }
-
-  async function showUsage(id, username) {
-    try {
-      const usage = await API.get(`/api/accounts/${id}/usage`);
-      const rows = Object.entries(usage).map(([action, u]) => `
-        <tr>
-          <td>${action}</td>
-          <td>${u.hour.count} / ${u.hour.limit ?? '∞'}</td>
-          <td>${u.day.count}  / ${u.day.limit  ?? '∞'}</td>
-          <td class="text-muted text-sm">${u.last_action_at ? new Date(u.last_action_at).toLocaleString() : '—'}</td>
-        </tr>`).join('');
-      Modal.open(`Rate Limits — ${username}`, `
-        <table>
-          <thead><tr><th>Action</th><th>Hour</th><th>Day</th><th>Last</th></tr></thead>
-          <tbody>${rows || '<tr><td colspan="4" class="text-muted">No data</td></tr>'}</tbody>
-        </table>`, { wide: true });
-    } catch (err) {
-      Toast.error(err.message);
-    }
-  }
-
-  async function toggleRole(id, currentRole) {
-    const newRole = currentRole === 'traffic' ? 'managed' : 'traffic';
-    try {
-      await API.patch(`/api/accounts/${id}/role`, { role: newRole });
-      Toast.success(`Role changed to ${newRole}`);
-      reload();
-    } catch (err) {
-      Toast.error(err.message);
-    }
-  }
-
-  return { render, reload, add, _submitAdd, remove, showHealth, showUsage, toggleRole };
+  return { render, reload, add, _submitAdd, bulkAdd, _submitBulk, setStatus, remove };
 })();
