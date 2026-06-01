@@ -2,34 +2,27 @@
 
 const { chromium } = require('playwright');
 const { makeLogger } = require('../utils/logger');
-const { loadSession } = require('../account-manager/session-manager');
-const { getProxyForAccount } = require('../account-manager/index');
 const { getDb } = require('../database/db');
-const fs = require('fs');
 
 const log = makeLogger('Browser');
 
 // ----------------------------------------------------------------
-// Prevent >1 browser per account simultaneously
+// Concurrency slot tracking — shared across ghost + anonymous sessions
 // ----------------------------------------------------------------
 
-const _activeBrowsers = new Set();
+const _activeSessions = new Set();
 const MAX_CONCURRENT  = parseInt(process.env.MAX_CONCURRENT_BROWSERS ?? '4', 10);
 
-function isAccountBusy(accountId) {
-  return _activeBrowsers.has(accountId);
-}
-
 function isConcurrencyFull() {
-  return _activeBrowsers.size >= MAX_CONCURRENT;
+  return _activeSessions.size >= MAX_CONCURRENT;
 }
 
-function markBusy(accountId) {
-  _activeBrowsers.add(accountId);
+function markBusy(slotId) {
+  _activeSessions.add(slotId);
 }
 
-function markFree(accountId) {
-  _activeBrowsers.delete(accountId);
+function markFree(slotId) {
+  _activeSessions.delete(slotId);
 }
 
 // ----------------------------------------------------------------
@@ -368,102 +361,6 @@ function buildFingerprintScript(seed, viewport, ua, gpuPair, opts = {}) {
 }
 
 // ----------------------------------------------------------------
-// Launch browser for a specific account
-// Returns { browser, context, page } — caller MUST call cleanup()
-// ----------------------------------------------------------------
-
-async function launchForAccount(accountId, platform) {
-  if (isAccountBusy(accountId)) {
-    throw new Error(`Account ${accountId} already has a running browser instance`);
-  }
-  if (isConcurrencyFull()) {
-    throw new Error(`Concurrent browser limit reached (${MAX_CONCURRENT}). Try again later.`);
-  }
-
-  const proxy = getProxyForAccount(accountId);
-  const viewport = pick(DESKTOP_VIEWPORTS);
-  const ua = pick(USER_AGENTS);
-  const gpuPair = pick(GPU_PAIRS);
-  const seed = randInt(100000, 999999999);
-
-  log.info('Launching browser', { accountId, platform, proxy: proxy?.host ?? 'none' });
-
-  const launchOptions = {
-    headless: true,
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-blink-features=AutomationControlled',
-      '--disable-infobars',
-      '--disable-extensions',
-      '--disable-default-apps',
-      '--no-first-run',
-      '--no-default-browser-check',
-      '--disable-features=TranslateUI,VizDisplayCompositor',
-      '--disable-ipc-flooding-protection',
-      '--password-store=basic',
-      '--use-mock-keychain',
-      `--window-size=${viewport.width},${viewport.height}`,
-    ],
-  };
-
-  if (proxy) {
-    launchOptions.proxy = {
-      server:   `${proxy.protocol}://${proxy.host}:${proxy.port}`,
-      username: proxy.username ?? undefined,
-      password: proxy.password ?? undefined,
-    };
-  }
-
-  const browser = await chromium.launch(launchOptions);
-
-  const contextOptions = {
-    viewport,
-    userAgent: ua,
-    locale: 'en-US',
-    timezoneId: 'America/New_York',
-    geolocation: null,
-    permissions: [],
-    extraHTTPHeaders: {
-      'Accept-Language': 'en-US,en;q=0.9',
-    },
-  };
-
-  // Load saved storageState if available
-  const storageState = loadSession(accountId, platform);
-  if (storageState) {
-    contextOptions.storageState = storageState;
-    log.debug('Loaded existing session', { accountId, platform });
-  }
-
-  const context = await browser.newContext(contextOptions);
-  await context.addInitScript(buildFingerprintScript(seed, viewport, ua, gpuPair));
-
-  const page = await context.newPage();
-
-  // Intercept and block unnecessary resources (images/fonts in non-critical paths)
-  // Disabled by default — enable per-action if needed for speed
-
-  markBusy(accountId);
-  log.info('Browser ready', { accountId, platform });
-
-  return {
-    browser,
-    context,
-    page,
-    cleanup: async () => {
-      try {
-        await browser.close();
-      } finally {
-        markFree(accountId);
-        log.debug('Browser closed', { accountId });
-      }
-    },
-  };
-}
-
-// ----------------------------------------------------------------
 // Launch an anonymous browser (no account, no session)
 // Uses concurrency slot so anon + account browsers share the cap
 // ----------------------------------------------------------------
@@ -680,4 +577,4 @@ async function launchWithGhost(ghostId) {
   };
 }
 
-module.exports = { launchForAccount, launchAnonymous, launchWithGhost, isAccountBusy, isConcurrencyFull, recordProxyFailure };
+module.exports = { launchAnonymous, launchWithGhost, isConcurrencyFull, recordProxyFailure };

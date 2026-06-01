@@ -20,19 +20,13 @@ app.use(express.static(path.join(__dirname, '../../public')));
 app.post('/api/auth/login', loginHandler);
 app.post('/api/auth/change-password', requireAuth, changePasswordHandler);
 
-// OAuth callbacks — no auth required (redirect from external platform)
-app.use('/api/oauth', require('./routes/oauth'));
-
-// All other API routes require auth
-app.use('/api/accounts',  requireAuth, require('./routes/accounts'));
-app.use('/api/campaigns', requireAuth, require('./routes/campaigns'));
-app.use('/api/proxies',   requireAuth, require('./routes/proxies'));
-app.use('/api/schedule',  requireAuth, require('./routes/schedule'));
+// All API routes require auth
 app.use('/api/analytics', requireAuth, require('./routes/analytics'));
-app.use('/api/logs',      requireAuth, require('./routes/logs'));
+app.use('/api/proxies',   requireAuth, require('./routes/proxies'));
 app.use('/api/settings',  requireAuth, require('./routes/settings'));
 app.use('/api/traffic',   requireAuth, require('./routes/traffic'));
 app.use('/api/ghosts',    requireAuth, require('./routes/ghosts'));
+app.use('/api/logs',      requireAuth, require('./routes/logs'));
 
 // SPA fallback
 app.get('*', (_req, res) => res.sendFile(path.join(__dirname, '../../public/index.html')));

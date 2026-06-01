@@ -155,12 +155,16 @@ function deleteGhost(ghostId) {
 const MAX_PER_DAY = parseInt(process.env.GHOST_MAX_USES_PER_DAY ?? '8', 10);
 const REST_MINUTES = parseInt(process.env.GHOST_REST_MINUTES ?? '45', 10);
 
+// Atomic pick-and-claim: sets last_used_at = NOW on selection so
+// concurrent workers can't double-pick the same ghost identity.
+// (better-sqlite3 is synchronous — no async race between SELECT and UPDATE)
 function pickGhost(platform = 'youtube') {
   const db         = getDb();
   const today      = new Date().toISOString().slice(0, 10);
   const restCutoff = new Date(Date.now() - REST_MINUTES * 60_000).toISOString();
+  const now        = new Date().toISOString();
 
-  return db.prepare(`
+  const ghost = db.prepare(`
     SELECT * FROM ghost_profiles
     WHERE status = 'ready'
     AND platform = ?
@@ -168,7 +172,14 @@ function pickGhost(platform = 'youtube') {
     AND (today_date IS NULL OR today_date != ? OR use_today < ?)
     ORDER BY last_used_at ASC
     LIMIT 1
-  `).get(platform, restCutoff, today, MAX_PER_DAY) ?? null;
+  `).get(platform, restCutoff, today, MAX_PER_DAY);
+
+  if (!ghost) return null;
+
+  db.prepare('UPDATE ghost_profiles SET last_used_at=?, updated_at=? WHERE id=?')
+    .run(now, now, ghost.id);
+
+  return ghost;
 }
 
 function recordUse(ghostId) {

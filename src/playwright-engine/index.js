@@ -1,10 +1,8 @@
 'use strict';
 
 const { makeLogger } = require('../utils/logger');
-const { launchForAccount, launchAnonymous, launchWithGhost, isAccountBusy, isConcurrencyFull } = require('./browser');
+const { launchAnonymous, launchWithGhost, isConcurrencyFull } = require('./browser');
 const gm = require('../ghost/manager');
-const { saveSession } = require('../account-manager/session-manager');
-const am = require('../account-manager/index');
 
 const instagram = require('./platforms/instagram');
 const tiktok    = require('./platforms/tiktok');
@@ -94,100 +92,77 @@ const ACTION_MAP = {
 };
 
 // ----------------------------------------------------------------
-// Core executor: run one action for one account
+// Ghost action executor — run a social action (like, follow, etc.)
+// using an authenticated ghost's persistent storageState session.
 //
-//   accountId : number
-//   platform  : 'instagram' | 'tiktok' | ...
-//   action    : action name from ACTION_MAP
-//   params    : additional arguments to pass to the platform fn
+//   platform : 'facebook' | 'instagram' | 'tiktok' | ...
+//   action   : action name from ACTION_MAP (e.g. 'like_post', 'follow')
+//   params   : { postUrl, profileUrl, username, ... }
 //
-// Returns { success, event?, message?, ... }
+// Ghost is picked by platform — must have credentials_json for the
+// one-time login that seeded its session.  If the stored session has
+// expired the ghost re-logs in automatically; if re-login fails the
+// ghost is set back to 'cold' for re-warmup.
 // ----------------------------------------------------------------
 
-async function executeAction(accountId, platform, action, params = {}) {
+async function executeGhostAction(platform, action, params = {}) {
   const platformModule = PLATFORMS[platform];
-  if (!platformModule) throw new Error(`Unknown platform: ${platform}`);
+  if (!platformModule) return { success: false, reason: `unknown_platform:${platform}` };
 
   const actionDef = ACTION_MAP[platform]?.[action];
-  if (!actionDef) throw new Error(`Unknown action "${action}" for platform "${platform}"`);
+  if (!actionDef) return { success: false, reason: `unknown_action:${action}` };
 
-  // ---- 1. Pre-action gate ----
-  if (actionDef.rateType) {
-    const gate = am.canAct(accountId, platform, actionDef.rateType);
-    if (!gate.allowed) {
-      log.debug('Action blocked by gate', { accountId, platform, action, reason: gate.reason });
-      return { success: false, blocked: true, reason: gate.reason };
-    }
-  } else {
-    // For non-rate-limited actions (login, scroll) — still check status
-    const account = am.getAccount(accountId);
-    if (!account) return { success: false, reason: 'account_not_found' };
-    if (account.status === 'disabled') return { success: false, reason: 'account_disabled' };
+  const ghost = gm.pickGhost(platform);
+  if (!ghost) {
+    log.debug('No ghost available for action', { platform, action });
+    return { success: false, reason: 'no_ghost_available' };
   }
 
-  // ---- 2. Prevent concurrent browser instances + global cap ----
-  if (isAccountBusy(accountId)) {
-    log.warn('Account busy — skipping', { accountId, platform, action });
-    return { success: false, reason: 'account_busy' };
+  if (!ghost.credentials_json) {
+    return { success: false, reason: 'ghost_not_authenticated' };
   }
-  if (isConcurrencyFull()) {
-    log.warn('Concurrency limit reached — skipping', { accountId, platform, action });
-    return { success: false, reason: 'concurrency_limit' };
-  }
-
-  const account = am.getAccount(accountId);
-  if (!account) return { success: false, reason: 'account_not_found' };
 
   let session = null;
   try {
-    session = await launchForAccount(accountId, platform);
+    session = await launchWithGhost(ghost.id);
     const { page, context } = session;
 
-    // ---- 3. Ensure logged in ----
-    if (action !== 'login') {
-      const isLoggedIn = await _checkLoggedIn(page, platform);
-      if (!isLoggedIn) {
-        log.info('Session expired — re-logging in', { accountId, platform });
-        const loginResult = await platformModule.login(page, account);
-        if (!loginResult.success) {
-          am.health.logEvent(accountId, platform, loginResult.event ?? 'login_required', 'Auto re-login failed');
-          return loginResult;
-        }
-        // Save fresh session
-        const state = await context.storageState();
-        saveSession(accountId, platform, state);
+    // Verify the stored session is still valid; re-login if expired
+    const loggedIn = await _checkLoggedIn(page, platform);
+    if (!loggedIn) {
+      log.info('Ghost session expired — re-logging in', { ghostId: ghost.id, platform });
+      const creds   = JSON.parse(ghost.credentials_json);
+      const relogin = await platformModule.login(page, creds);
+      if (!relogin.success) {
+        gm.setStatus(ghost.id, 'cold');
+        return { success: false, reason: `session_expired_relogin_failed:${relogin.event}` };
       }
     }
 
-    // ---- 4. Execute the action ----
-    const fn   = platformModule[actionDef.fn];
-    const args = _buildArgs(action, platform, account, params);
+    const fn     = platformModule[actionDef.fn];
+    const args   = _buildArgs(action, platform, null, params);
     const result = await fn(page, ...args);
 
-    // ---- 5. Handle detection events ----
     if (!result.success && result.event) {
-      am.health.logEvent(accountId, platform, result.event, result.message ?? null);
-      log.warn('Action returned detection event', { accountId, platform, action, event: result.event });
+      log.warn('Ghost action detection', { ghostId: ghost.id, platform, action, event: result.event });
+      if (['disabled', 'challenge'].includes(result.event)) gm.setStatus(ghost.id, 'cold');
+      gm.logAction(ghost.id, platform, action, 'failed', result.event);
       return result;
     }
 
-    // ---- 6. Save updated session + record action ----
     if (result.success) {
-      if (actionDef.rateType) {
-        am.limits.recordAction(accountId, platform, actionDef.rateType);
-      }
-      // Persist fresh session state after any successful action
       const state = await context.storageState();
-      saveSession(accountId, platform, state);
+      gm.saveStorageState(ghost.id, state);
+      gm.recordUse(ghost.id);
+      gm.logAction(ghost.id, platform, action, 'success');
     }
 
     return result;
 
   } catch (err) {
-    log.error('Action threw error', { accountId, platform, action, err: err.message });
-    am.health.logEvent(accountId, platform, 'warning', `Action error: ${err.message}`);
+    log.error('Ghost action error', { ghostId: ghost.id, platform, action, err: err.message });
+    gm.logAction(ghost.id, platform, action, 'failed', err.message);
     return { success: false, error: err.message };
-
   } finally {
     if (session) await session.cleanup();
   }
@@ -506,17 +481,8 @@ async function executeGhostView(platform, url) {
   }
 }
 
-// ----------------------------------------------------------------
-// Convenience: run login + save session for a fresh account
-// ----------------------------------------------------------------
-
-async function loginAndSaveSession(accountId, platform) {
-  return executeAction(accountId, platform, 'login');
-}
-
 module.exports = {
-  executeAction,
   executeAnonymousView,
   executeGhostView,
-  loginAndSaveSession,
+  executeGhostAction,
 };

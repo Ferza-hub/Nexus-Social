@@ -1,263 +1,153 @@
 'use strict';
 
-const { executeAction, executeAnonymousView, executeGhostView } = require('../playwright-engine/index');
-const { getDb }         = require('../database/db');
-const { makeLogger }    = require('../utils/logger');
+const { executeGhostView, executeGhostAction } = require('../playwright-engine/index');
+const { getDb }      = require('../database/db');
+const { makeLogger } = require('../utils/logger');
 
 const log = makeLogger('TrafficRunner');
 
-// In-memory stop signals — keyed by job id
-const _active = new Map();
+const MAX_CONCURRENT = parseInt(process.env.MAX_CONCURRENT_BROWSERS ?? '4', 10);
+
+function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
+function randInt(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
 
 // ----------------------------------------------------------------
-// Action map: what Playwright action each traffic type maps to
-// canRepeat = same account can perform this action multiple times
-// canAnon   = can run without any logged-in account (anonymous browser)
+// Action definitions — all traffic goes through the ghost pool.
+//
+// type 'view'   → executeGhostView(ghostPlatform, targetValue)
+//   Ghost is matched by platform (anonymous for youtube, authenticated
+//   for all others).
+//
+// type 'action' → executeGhostAction(ghostPlatform, action, params)
+//   Ghost must have credentials_json (authenticated session).
+//   buildParams maps the raw target_value string to the right param key.
 // ----------------------------------------------------------------
 
 const TRAFFIC_ACTIONS = {
-  instagram: {
-    views:     { action: 'watch_reel',  paramKey: 'reelUrl',     canRepeat: true,  canAnon: true  },
-    likes:     { action: 'like_post',   paramKey: 'postUrl',     canRepeat: false, canAnon: false },
-    followers: { action: 'follow',      paramKey: 'username',    canRepeat: false, canAnon: false },
-  },
-  tiktok: {
-    views:     { action: 'watch_video', paramKey: 'videoUrl',    canRepeat: true,  canAnon: true  },
-    likes:     { action: 'like_video',  paramKey: 'videoUrl',    canRepeat: false, canAnon: false },
-    followers: { action: 'follow',      paramKey: 'username',    canRepeat: false, canAnon: false },
-  },
-  twitter: {
-    likes:     { action: 'like_post',   paramKey: 'tweetUrl',    canRepeat: false, canAnon: false },
-    followers: { action: 'follow',      paramKey: 'username',    canRepeat: false, canAnon: false },
-  },
   youtube: {
-    views:     { action: 'watch_video', paramKey: 'videoUrl',    canRepeat: true,  canAnon: true  },
-    likes:     { action: 'like_video',  paramKey: 'videoUrl',    canRepeat: false, canAnon: false },
-    followers: { action: 'subscribe',   paramKey: 'channelUrl',  canRepeat: false, canAnon: false },
+    views:     { type: 'view',   ghostPlatform: 'youtube' },
   },
   facebook: {
-    views:     { action: 'watch_reel',  paramKey: 'reelUrl',     canRepeat: true,  canAnon: true  },
-    likes:     { action: 'like_post',   paramKey: 'postUrl',     canRepeat: false, canAnon: false },
-    followers: { action: 'follow',      paramKey: 'profileUrl',  canRepeat: false, canAnon: false },
+    views:     { type: 'view',   ghostPlatform: 'facebook' },
+    likes:     { type: 'action', ghostPlatform: 'facebook', action: 'like_post',   buildParams: v => ({ postUrl: v })    },
+    followers: { type: 'action', ghostPlatform: 'facebook', action: 'follow_page', buildParams: v => ({ profileUrl: v }) },
+  },
+  instagram: {
+    views:     { type: 'action', ghostPlatform: 'instagram', action: 'watch_reel', buildParams: v => ({ reelUrl: v })   },
+    likes:     { type: 'action', ghostPlatform: 'instagram', action: 'like_post',  buildParams: v => ({ postUrl: v })   },
+    followers: { type: 'action', ghostPlatform: 'instagram', action: 'follow',     buildParams: v => ({ username: v })  },
+  },
+  tiktok: {
+    views:     { type: 'action', ghostPlatform: 'tiktok', action: 'watch_video',  buildParams: v => ({ videoUrl: v })  },
+    likes:     { type: 'action', ghostPlatform: 'tiktok', action: 'like_video',   buildParams: v => ({ videoUrl: v })  },
+    followers: { type: 'action', ghostPlatform: 'tiktok', action: 'follow',       buildParams: v => ({ username: v })  },
+  },
+  twitter: {
+    likes:     { type: 'action', ghostPlatform: 'twitter', action: 'like_post',   buildParams: v => ({ tweetUrl: v })  },
+    followers: { type: 'action', ghostPlatform: 'twitter', action: 'follow',      buildParams: v => ({ username: v })  },
   },
   threads: {
-    likes:     { action: 'like_post',   paramKey: 'postUrl',     canRepeat: false, canAnon: false },
-    followers: { action: 'follow',      paramKey: 'username',    canRepeat: false, canAnon: false },
+    likes:     { type: 'action', ghostPlatform: 'threads', action: 'like_post',   buildParams: v => ({ postUrl: v })   },
+    followers: { type: 'action', ghostPlatform: 'threads', action: 'follow',      buildParams: v => ({ username: v })  },
   },
 };
 
-function randInt(min, max) {
-  return Math.floor(Math.random() * (max - min + 1)) + min;
-}
-
-function delay(ms) {
-  return new Promise(r => setTimeout(r, ms));
-}
-
-// Extract username from profile URL for follower actions
-function extractTarget(platform, actionType, input) {
-  if (actionType !== 'followers') return input.trim();
-
-  const patterns = {
-    instagram: /instagram\.com\/(?:@)?([^/?#\s]+)/,
-    tiktok:    /tiktok\.com\/@?([^/?#\s]+)/,
-    twitter:   /(?:twitter|x)\.com\/([^/?#\s]+)/,
-    facebook:  /facebook\.com\/(?:@)?([^/?#\s]+)/,
-    threads:   /threads\.net\/(?:@)?([^/?#\s]+)/,
-  };
-
-  const m = input.trim().match(patterns[platform] ?? /$/);
-  return m ? m[1].replace(/^@/, '') : input.trim().replace(/^@/, '');
-}
-
-// Shuffle array in-place (Fisher-Yates) for diverse account ordering
-function shuffle(arr) {
-  for (let i = arr.length - 1; i > 0; i--) {
-    const j = randInt(0, i);
-    [arr[i], arr[j]] = [arr[j], arr[i]];
-  }
-  return arr;
-}
+// In-memory stop signals keyed by job id
+const _active = new Map();
 
 // ----------------------------------------------------------------
 // Main runner — called async, does not block server
 // ----------------------------------------------------------------
 
 async function runJob(jobId) {
-  const db = getDb();
-  let stopped = false;
-  _active.set(jobId, { stop: () => { stopped = true; } });
+  const db  = getDb();
+  const job = db.prepare('SELECT * FROM traffic_jobs WHERE id=?').get(jobId);
+  if (!job) return;
 
-  db.prepare("UPDATE traffic_jobs SET status='running', started_at=?, updated_at=? WHERE id=?")
+  const actionDef = TRAFFIC_ACTIONS[job.platform]?.[job.action_type];
+  if (!actionDef) {
+    db.prepare(`UPDATE traffic_jobs SET status='failed', updated_at=? WHERE id=?`)
+      .run(new Date().toISOString(), jobId);
+    return;
+  }
+
+  db.prepare(`UPDATE traffic_jobs SET status='running', started_at=?, updated_at=? WHERE id=?`)
     .run(new Date().toISOString(), new Date().toISOString(), jobId);
 
-  try {
-    const job = db.prepare('SELECT * FROM traffic_jobs WHERE id=?').get(jobId);
-    if (!job) return;
+  _active.set(jobId, true);
 
-    const actionDef = TRAFFIC_ACTIONS[job.platform]?.[job.action_type];
-    if (!actionDef) {
-      log.error('Unknown action type', { jobId, platform: job.platform, action_type: job.action_type });
-      db.prepare("UPDATE traffic_jobs SET status='failed', updated_at=? WHERE id=?")
-        .run(new Date().toISOString(), jobId);
-      return;
-    }
+  let done   = 0;
+  let streak = 0; // consecutive non-success results
 
-    const targetValue = extractTarget(job.platform, job.action_type, job.target_value);
-    let completed = 0;
-
-    const scope = job.account_scope ?? 'traffic';
-
-    // ----------------------------------------------------------------
-    // Anonymous path — views with no account required
-    // Only used for instant-mode (scope='traffic'). Managed-mode views
-    // fall through to the account-based path so rate limits apply.
-    // ----------------------------------------------------------------
-    if (actionDef.canAnon && scope !== 'managed') {
-      const CONCURRENT = Math.min(
-        parseInt(process.env.MAX_CONCURRENT_BROWSERS ?? '4', 10),
-        job.target_count
-      );
-
-      log.info('Job started (anonymous)', {
-        jobId, platform: job.platform, target: targetValue,
-        total: job.target_count, concurrent: CONCURRENT,
-      });
-
-      let consecutiveFails = 0;
-      let aborted = false;
-      const MAX_CONSEC_FAILS = 10;
-
-      const logView = (status, reason) =>
-        db.prepare(
-          'INSERT INTO traffic_logs (job_id, account_id, platform, action, status, message, created_at) VALUES (?,?,?,?,?,?,?)'
-        ).run(jobId, 0, job.platform, actionDef.action, status, reason ?? null, new Date().toISOString());
-
-      const worker = async () => {
-        while (completed < job.target_count && !stopped && !aborted) {
-          const result = await executeGhostView(job.platform, targetValue);
-          logView(result.success ? 'success' : 'failed', result.reason);
-
-          if (result.success) {
-            completed++;
-            consecutiveFails = 0;
-            db.prepare('UPDATE traffic_jobs SET completed_count=?, updated_at=? WHERE id=?')
-              .run(completed, new Date().toISOString(), jobId);
-            log.debug('Anonymous view done', { jobId, completed, total: job.target_count });
-          } else {
-            consecutiveFails++;
-            log.warn('Anonymous view failed', { jobId, consecutiveFails, reason: result.reason });
-            if (consecutiveFails >= MAX_CONSEC_FAILS) {
-              log.error('Too many consecutive failures — aborting', { jobId, platform: job.platform });
-              aborted = true;
-              break;
-            }
-          }
-
-          // Brief gap before this worker picks up the next slot
-          if (!stopped && !aborted && completed < job.target_count) {
-            await delay(randInt(500, 2000));
-          }
-        }
-      };
-
-      // Launch all workers simultaneously — they share the completed counter
-      await Promise.all(Array.from({ length: CONCURRENT }, worker));
-
-      if (aborted) {
-        db.prepare("UPDATE traffic_jobs SET status='failed', updated_at=? WHERE id=?")
-          .run(new Date().toISOString(), jobId);
-        return;
-      }
-
-      const finalStatus = stopped ? 'paused' : 'completed';
-      db.prepare('UPDATE traffic_jobs SET status=?, completed_at=?, updated_at=? WHERE id=?')
-        .run(finalStatus, new Date().toISOString(), new Date().toISOString(), jobId);
-
-      log.info('Job finished', { jobId, completed, finalStatus });
-      return;
-    }
-
-    // ----------------------------------------------------------------
-    // Account-based path — likes / followers (and managed-mode views)
-    // ----------------------------------------------------------------
-    const roleFilter = scope === 'managed' ? "account_role='managed'" : "account_role='traffic'";
-    const accounts = shuffle(
-      db.prepare(`SELECT * FROM accounts WHERE platform=? AND status='active' AND ${roleFilter}`).all(job.platform)
-    );
-
-    if (accounts.length === 0) {
-      log.warn('No active accounts', { jobId, platform: job.platform });
-      db.prepare("UPDATE traffic_jobs SET status='failed', updated_at=? WHERE id=?")
-        .run(new Date().toISOString(), jobId);
-      return;
-    }
-
-    const params = { [actionDef.paramKey]: targetValue };
-    let idx = 0;
-    let consecutiveFails = 0;
-    const MAX_CONSEC_FAILS = 10;
-
-    log.info('Job started', { jobId, platform: job.platform, action: actionDef.action, target: targetValue, total: job.target_count, accounts: accounts.length });
-
-    while (completed < job.target_count && !stopped) {
-      if (!actionDef.canRepeat && idx >= accounts.length) {
-        log.info('All accounts used for non-repeatable action', { jobId, completed });
-        break;
-      }
-
-      const account = accounts[idx % accounts.length];
-      idx++;
-
-      log.debug('Executing action', { jobId, accountId: account.id, username: account.username, action: actionDef.action });
-
-      const result = await executeAction(account.id, job.platform, actionDef.action, params);
-
-      const logStatus = result.success ? 'success' : (result.blocked ? 'skipped' : 'failed');
+  const logEntry = (status, message) => {
+    try {
       db.prepare(
-        'INSERT INTO traffic_logs (job_id, account_id, platform, action, status, message, created_at) VALUES (?,?,?,?,?,?,?)'
-      ).run(jobId, account.id, job.platform, actionDef.action, logStatus,
-            result.reason ?? result.message ?? null, new Date().toISOString());
+        `INSERT INTO traffic_logs (job_id, account_id, platform, action, status, message, created_at)
+         VALUES (?,0,?,?,?,?,?)`
+      ).run(jobId, job.platform, job.action_type, status, message ?? null, new Date().toISOString());
+    } catch (_) {}
+  };
+
+  const worker = async () => {
+    while (_active.has(jobId) && done < job.target_count) {
+      if (streak >= 10) break;
+
+      let result;
+      try {
+        if (actionDef.type === 'view') {
+          result = await executeGhostView(actionDef.ghostPlatform, job.target_value);
+        } else {
+          const params = actionDef.buildParams(job.target_value);
+          result = await executeGhostAction(actionDef.ghostPlatform, actionDef.action, params);
+        }
+      } catch (err) {
+        result = { success: false, reason: err.message };
+      }
 
       if (result.success) {
-        completed++;
-        consecutiveFails = 0;
+        done++;
+        streak = 0;
         db.prepare('UPDATE traffic_jobs SET completed_count=?, updated_at=? WHERE id=?')
-          .run(completed, new Date().toISOString(), jobId);
-        log.debug('Action succeeded', { jobId, completed, total: job.target_count });
+          .run(done, new Date().toISOString(), jobId);
+        logEntry('success', null);
+        log.debug('Action done', { jobId, done, target: job.target_count });
+      } else if (result.reason === 'no_ghost_available') {
+        logEntry('skipped', 'no_ghost_available');
+        await delay(randInt(10_000, 20_000)); // wait for a ghost to become available
       } else {
-        consecutiveFails++;
-        log.debug('Action skipped/failed', { jobId, accountId: account.id, consecutiveFails, reason: result.reason ?? result.message });
-        if (consecutiveFails >= MAX_CONSEC_FAILS) {
-          log.error('Too many consecutive failures — aborting job', { jobId });
-          db.prepare("UPDATE traffic_jobs SET status='failed', updated_at=? WHERE id=?")
-            .run(new Date().toISOString(), jobId);
-          return;
-        }
+        streak++;
+        logEntry('failed', result.reason ?? result.error ?? null);
+        log.debug('Action failed', { jobId, streak, reason: result.reason });
       }
 
-      if (!stopped && completed < job.target_count) {
-        await delay(randInt(3000, 9000));
+      if (_active.has(jobId) && done < job.target_count) {
+        await delay(randInt(500, 2000));
       }
     }
+  };
 
-    const finalStatus = stopped ? 'paused' : 'completed';
-    db.prepare('UPDATE traffic_jobs SET status=?, completed_at=?, updated_at=? WHERE id=?')
-      .run(finalStatus, new Date().toISOString(), new Date().toISOString(), jobId);
-
-    log.info('Job finished', { jobId, completed, finalStatus });
-
+  try {
+    await Promise.all(Array.from({ length: MAX_CONCURRENT }, worker));
   } catch (err) {
-    log.error('Job threw unhandled error', { jobId, err: err.message });
-    db.prepare("UPDATE traffic_jobs SET status='failed', updated_at=? WHERE id=?")
-      .run(new Date().toISOString(), jobId);
-  } finally {
-    _active.delete(jobId);
+    log.error('Worker threw', { jobId, err: err.message });
   }
+
+  if (_active.has(jobId)) {
+    const status = done >= job.target_count ? 'completed' : (streak >= 10 ? 'failed' : 'paused');
+    db.prepare(`UPDATE traffic_jobs SET status=?, completed_at=?, updated_at=? WHERE id=?`)
+      .run(status, new Date().toISOString(), new Date().toISOString(), jobId);
+    _active.delete(jobId);
+  } else {
+    // Stopped externally
+    db.prepare(`UPDATE traffic_jobs SET status='paused', updated_at=? WHERE id=?`)
+      .run(new Date().toISOString(), jobId);
+  }
+
+  log.info('Job finished', { jobId, done, target: job.target_count });
 }
 
 function stopJob(jobId) {
-  _active.get(jobId)?.stop();
+  _active.delete(jobId);
 }
 
 function isRunning(jobId) {
